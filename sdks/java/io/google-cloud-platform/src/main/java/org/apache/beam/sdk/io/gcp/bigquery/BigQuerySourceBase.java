@@ -153,10 +153,16 @@ abstract class BigQuerySourceBase extends BoundedSource<TableRow> {
 
     SerializableFunction<GenericRecord, TableRow> function =
         new SerializableFunction<GenericRecord, TableRow>() {
+          private transient TableSchema cachedSchema = null;
+
           @Override
           public TableRow apply(GenericRecord input) {
+            if (cachedSchema == null) {
+              cachedSchema = BigQueryHelpers.fromJsonString(jsonSchema, TableSchema.class);
+            }
+
             return BigQueryAvroUtils.convertGenericRecordToTableRow(
-                input, BigQueryHelpers.fromJsonString(jsonSchema, TableSchema.class));
+                input, cachedSchema);
           }};
 
     List<BoundedSource<TableRow>> avroSources = Lists.newArrayList();
