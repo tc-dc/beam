@@ -30,6 +30,7 @@ import com.google.api.services.bigquery.model.TableReference;
 import com.google.api.services.bigquery.model.TableRow;
 import com.google.api.services.bigquery.model.TableSchema;
 import com.google.common.base.Function;
+import com.google.common.base.Optional;
 import com.google.common.base.Supplier;
 import com.google.common.base.Suppliers;
 import com.google.common.collect.ImmutableList;
@@ -64,7 +65,7 @@ import org.slf4j.LoggerFactory;
  * </ul>
  * ...
  */
-abstract class BigQuerySourceBase extends BoundedSource<TableRow> {
+abstract class BigQuerySourceBase<T> extends BoundedSource<T> {
   private static final Logger LOG = LoggerFactory.getLogger(BigQuerySourceBase.class);
 
   // The maximum number of retries to poll a BigQuery job.
@@ -73,11 +74,20 @@ abstract class BigQuerySourceBase extends BoundedSource<TableRow> {
   protected final String stepUuid;
   protected final BigQueryServices bqServices;
 
-  private transient List<BoundedSource<TableRow>> cachedSplitResult;
+  private transient List<BoundedSource<T>> cachedSplitResult;
+  private SerializableFunction<GenericRecord, T> parseFn;
+  private Coder<T> coder;
 
-  BigQuerySourceBase(String stepUuid, BigQueryServices bqServices) {
+  BigQuerySourceBase(
+      String stepUuid,
+      BigQueryServices bqServices,
+      Coder<T> coder,
+      @Nullable SerializableFunction<GenericRecord, T> parseFn
+    ) {
     this.stepUuid = checkNotNull(stepUuid, "stepUuid");
     this.bqServices = checkNotNull(bqServices, "bqServices");
+    this.coder = coder;
+    this.parseFn = parseFn;
   }
 
   protected TableSchema getSchema(PipelineOptions options) throws Exception {
@@ -106,7 +116,7 @@ abstract class BigQuerySourceBase extends BoundedSource<TableRow> {
   }
 
   @Override
-  public List<BoundedSource<TableRow>> split(
+  public List<BoundedSource<T>> split(
       long desiredBundleSizeBytes, PipelineOptions options) throws Exception {
     // split() can be called multiple times, e.g. Dataflow runner may call it multiple times
     // with different desiredBundleSizeBytes in case the split() call produces too many sources.
@@ -133,8 +143,8 @@ abstract class BigQuerySourceBase extends BoundedSource<TableRow> {
   }
 
   @Override
-  public Coder<TableRow> getOutputCoder() {
-    return TableRowJsonCoder.of();
+  public Coder<T> getOutputCoder() {
+    return coder;
   }
 
   private List<ResourceId> executeExtract(
@@ -167,21 +177,37 @@ abstract class BigQuerySourceBase extends BoundedSource<TableRow> {
     return BigQueryIO.getExtractFilePaths(extractDestinationDir, extractJob);
   }
 
-  List<BoundedSource<TableRow>> createSources(List<ResourceId> files, TableSchema tableSchema)
+  private SerializableFunction<GenericRecord, T> getDefaultParser(TableSchema tableSchema) {
+    final String jsonSchema;
+    try {
+      jsonSchema = BigQueryIO.JSON_FACTORY.toString(tableSchema);
+    } catch (IOException e) {
+      throw new RuntimeException(e);
+    }
+
+    SerializableFunction<GenericRecord, TableRow> fn = new SerializableFunction<GenericRecord, TableRow>() {
+      private Supplier<TableSchema> schema = Suppliers.memoize(
+          Suppliers.compose(new TableSchemaFunction(), Suppliers.ofInstance(jsonSchema)));
+
+      @Override
+      public TableRow apply(GenericRecord input) {
+        return BigQueryAvroUtils.convertGenericRecordToTableRow(input, schema.get());
+      }
+    };
+    return (SerializableFunction<GenericRecord, T>)fn;
+  }
+
+  List<BoundedSource<T>> createSources(List<ResourceId> files, TableSchema tableSchema)
       throws IOException, InterruptedException {
-    final String jsonSchema = BigQueryIO.JSON_FACTORY.toString(tableSchema);
 
-    SerializableFunction<GenericRecord, TableRow> function =
-        new SerializableFunction<GenericRecord, TableRow>() {
-          private Supplier<TableSchema> schema = Suppliers.memoize(
-              Suppliers.compose(new TableSchemaFunction(), Suppliers.ofInstance(jsonSchema)));
+    SerializableFunction<GenericRecord, T> function;
+    if (this.parseFn == null) {
+      function = getDefaultParser(tableSchema);
+    } else {
+      function = parseFn;
+    }
 
-          @Override
-          public TableRow apply(GenericRecord input) {
-            return BigQueryAvroUtils.convertGenericRecordToTableRow(input, schema.get());
-          }};
-
-    List<BoundedSource<TableRow>> avroSources = Lists.newArrayList();
+    List<BoundedSource<T>> avroSources = Lists.newArrayList();
     for (ResourceId file : files) {
       avroSources.add(
           AvroSource.from(file.toString()).withParseFn(function, getOutputCoder()));

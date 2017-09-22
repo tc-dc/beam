@@ -449,14 +449,25 @@ public class BigQueryIO {
       return toBuilder().setBigQueryServices(testServices).build();
     }
 
-    private BigQuerySourceBase createSource(String jobUuid) {
+    private BigQuerySourceBase<TableRow> createSource(String jobUuid) {
       BigQuerySourceBase source;
       if (getQuery() == null) {
-        source = BigQueryTableSource.create(jobUuid, getTableProvider(), getBigQueryServices());
+        source = BigQueryTableSource.create(
+            jobUuid,
+            getTableProvider(),
+            getBigQueryServices(),
+            TableRowJsonCoder.of(),
+            null);
       } else {
         source =
             BigQueryQuerySource.create(
-                jobUuid, getQuery(), getFlattenResults(), getUseLegacySql(), getBigQueryServices());
+                jobUuid,
+                getQuery(),
+                getFlattenResults(),
+                getUseLegacySql(),
+                getBigQueryServices(),
+                TableRowJsonCoder.of(),
+                null);
       }
       return source;
     }
@@ -583,7 +594,7 @@ public class BigQueryIO {
                           @ProcessElement
                           public void processElement(ProcessContext c) throws Exception {
                             String jobUuid = c.element();
-                            BigQuerySourceBase source = createSource(jobUuid);
+                            BigQuerySourceBase<TableRow> source = createSource(jobUuid);
                             String schema =
                                 BigQueryHelpers.toJsonString(
                                     source.getSchema(c.getPipelineOptions()));
@@ -621,7 +632,7 @@ public class BigQueryIO {
                                     BigQueryHelpers.fromJsonString(
                                         c.sideInput(schemaView), TableSchema.class);
                                 String jobUuid = c.sideInput(jobIdTokenView);
-                                BigQuerySourceBase source = createSource(jobUuid);
+                                BigQuerySourceBase<TableRow> source = createSource(jobUuid);
                                 List<BoundedSource<TableRow>> sources =
                                     source.createSources(
                                         ImmutableList.of(

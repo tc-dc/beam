@@ -27,10 +27,16 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Strings;
 import java.io.IOException;
 import java.util.concurrent.atomic.AtomicReference;
+
+import javax.annotation.Nullable;
+
+import org.apache.avro.generic.GenericRecord;
+import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.io.gcp.bigquery.BigQueryHelpers.TableRefToJson;
 import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.options.ValueProvider;
 import org.apache.beam.sdk.options.ValueProvider.NestedValueProvider;
+import org.apache.beam.sdk.transforms.SerializableFunction;
 import org.apache.beam.sdk.transforms.display.DisplayData;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,14 +45,16 @@ import org.slf4j.LoggerFactory;
  * A {@link BigQuerySourceBase} for reading BigQuery tables.
  */
 @VisibleForTesting
-class BigQueryTableSource extends BigQuerySourceBase {
+class BigQueryTableSource<T> extends BigQuerySourceBase<T> {
   private static final Logger LOG = LoggerFactory.getLogger(BigQueryTableSource.class);
 
-  static BigQueryTableSource create(
+  static <T>BigQueryTableSource<T> create(
       String stepUuid,
       ValueProvider<TableReference> table,
-      BigQueryServices bqServices) {
-    return new BigQueryTableSource(stepUuid, table, bqServices);
+      BigQueryServices bqServices,
+      Coder<T> coder,
+      @Nullable SerializableFunction<GenericRecord, T> parseFn) {
+    return new BigQueryTableSource<T>(stepUuid, table, bqServices, coder, parseFn);
   }
 
   private final ValueProvider<String> jsonTable;
@@ -55,8 +63,11 @@ class BigQueryTableSource extends BigQuerySourceBase {
   private BigQueryTableSource(
       String stepUuid,
       ValueProvider<TableReference> table,
-      BigQueryServices bqServices) {
-    super(stepUuid, bqServices);
+      BigQueryServices bqServices,
+      Coder<T> coder,
+      @Nullable SerializableFunction<GenericRecord, T> parseFn
+  ) {
+    super(stepUuid, bqServices, coder, parseFn);
     this.jsonTable = NestedValueProvider.of(checkNotNull(table, "table"), new TableRefToJson());
     this.tableSizeBytes = new AtomicReference<>();
   }
@@ -91,11 +102,12 @@ class BigQueryTableSource extends BigQuerySourceBase {
   }
 
   @Override
-  public BoundedReader<TableRow> createReader(PipelineOptions options) throws IOException {
+  public BoundedReader<T> createReader(PipelineOptions options) throws IOException {
     BigQueryOptions bqOptions = options.as(BigQueryOptions.class);
     TableReference tableRef = BigQueryIO.JSON_FACTORY.fromString(jsonTable.get(),
         TableReference.class);
-    return new BigQueryReader(this, bqServices.getReaderFromTable(bqOptions, tableRef));
+    return (BoundedReader<T>)
+        new BigQueryReader(this, bqServices.getReaderFromTable(bqOptions, tableRef));
   }
 
   @Override
