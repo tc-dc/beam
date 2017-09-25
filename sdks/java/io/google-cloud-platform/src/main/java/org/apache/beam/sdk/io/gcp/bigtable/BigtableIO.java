@@ -57,10 +57,11 @@ import org.apache.beam.sdk.transforms.PTransform;
 import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.transforms.SerializableFunction;
 import org.apache.beam.sdk.transforms.display.DisplayData;
+import org.apache.beam.sdk.transforms.windowing.GlobalWindow;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PBegin;
 import org.apache.beam.sdk.values.PCollection;
-import org.apache.beam.sdk.values.PDone;
+import org.joda.time.Instant;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -465,7 +466,7 @@ public class BigtableIO {
   @Experimental(Experimental.Kind.SOURCE_SINK)
   @AutoValue
   public abstract static class Write
-      extends PTransform<PCollection<KV<ByteString, Iterable<Mutation>>>, PDone> {
+      extends PTransform<PCollection<KV<ByteString, Iterable<Mutation>>>, PCollection<Void>> {
 
     static SerializableFunction<BigtableOptions.Builder, BigtableOptions.Builder>
     enableBulkApiConfigurator(final @Nullable SerializableFunction<BigtableOptions.Builder,
@@ -657,11 +658,10 @@ public class BigtableIO {
     }
 
     @Override
-    public PDone expand(PCollection<KV<ByteString, Iterable<Mutation>>> input) {
+    public PCollection<Void> expand(PCollection<KV<ByteString, Iterable<Mutation>>> input) {
       getBigtableConfig().validate();
 
-      input.apply(ParDo.of(new BigtableWriterFn(getBigtableConfig())));
-      return PDone.in(input.getPipeline());
+      return input.apply(ParDo.of(new BigtableWriterFn(getBigtableConfig())));
     }
 
     @Override
@@ -713,10 +713,11 @@ public class BigtableIO {
       }
 
       @FinishBundle
-      public void finishBundle() throws Exception {
+      public void finishBundle(FinishBundleContext c) throws Exception {
         bigtableWriter.flush();
         checkForFailures();
-        LOG.debug("Wrote {} records", recordsWritten);
+        LOG.info("Wrote {} records", recordsWritten);
+        c.output(null, Instant.now(), GlobalWindow.INSTANCE);
       }
 
       @Teardown
