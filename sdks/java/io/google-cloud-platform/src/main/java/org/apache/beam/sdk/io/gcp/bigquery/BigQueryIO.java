@@ -34,23 +34,18 @@ import com.google.api.services.bigquery.model.TableSchema;
 import com.google.api.services.bigquery.model.TimePartitioning;
 import com.google.auto.value.AutoValue;
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Function;
 import com.google.common.base.MoreObjects;
 import com.google.common.base.Predicates;
 import com.google.common.base.Strings;
-import com.google.common.base.Supplier;
-import com.google.common.base.Suppliers;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import java.io.IOException;
-import java.io.Serializable;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
 import javax.annotation.Nullable;
 
-import org.apache.avro.generic.GenericRecord;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.PipelineRunner;
 import org.apache.beam.sdk.annotations.Experimental;
@@ -321,11 +316,7 @@ public class BigQueryIO {
    * }</pre>
    */
   public static Read read() {
-    return new AutoValue_BigQueryIO_Read.Builder()
-        .setValidate(true)
-        .setWithTemplateCompatibility(false)
-        .setBigQueryServices(new BigQueryServicesImpl())
-        .build();
+    return new Read();
   }
 
   /**
@@ -340,63 +331,67 @@ public class BigQueryIO {
         .build();
   }
 
-  private static class TableSchemaFunction
-      implements Serializable, Function<String, TableSchema> {
-    @Nullable
-    @Override
-    public TableSchema apply(@Nullable String input) {
-      return BigQueryHelpers.fromJsonString(input, TableSchema.class);
-    }
-  }
-
   @VisibleForTesting
-  static class TableRowParserFactory
-      implements SerializableFunction<
-      TableSchema,
-      SerializableFunction<GenericRecord, TableRow>> {
+  static class TableRowParser
+      implements SerializableFunction<SchemaAndRecord, TableRow> {
 
-    public static final TableRowParserFactory INSTANCE = new TableRowParserFactory();
+    public static final TableRowParser INSTANCE = new TableRowParser();
 
-    public SerializableFunction<GenericRecord, TableRow> apply(TableSchema tableSchema) {
-      final String jsonSchema;
-      try {
-        jsonSchema = BigQueryIO.JSON_FACTORY.toString(tableSchema);
-      } catch (IOException e) {
-        throw new RuntimeException(e);
-      }
-
-      return new SerializableFunction<GenericRecord, TableRow>() {
-        private Supplier<TableSchema> schema = Suppliers.memoize(
-            Suppliers.compose(new TableSchemaFunction(), Suppliers.ofInstance(jsonSchema)));
-
-        @Override
-        public TableRow apply(GenericRecord input) {
-          return BigQueryAvroUtils.convertGenericRecordToTableRow(input, schema.get());
-        }
-      };
+    public TableRow apply(SchemaAndRecord schemaAndRecord) {
+      return BigQueryAvroUtils.convertGenericRecordToTableRow(
+          schemaAndRecord.getRecord(),
+          schemaAndRecord.getTableSchema());
     }
   }
 
-  /** Implementation of {@link #read}. */
-  @AutoValue
-  public abstract static class Read extends ReadBase<TableRow, Read, Read.Builder> {
-
-    abstract Builder toBuilder();
+  public static class Read extends PTransform<PBegin, PCollection<TableRow>> {
+    private final ReadGenericRecords<TableRow> inner;
 
     @Override
-    Coder<TableRow> getCoder() {
-      return TableRowJsonCoder.of();
+    public PCollection<TableRow> expand(PBegin input) {
+      return inner.expand(input);
+    }
+
+    Read() {
+      this(BigQueryIO.<TableRow>readRecords()
+          .withParseFn(TableRowParser.INSTANCE)
+          .withCoder(TableRowJsonCoder.of())
+      );
+    }
+
+    Read(BigQueryIO.ReadGenericRecords<TableRow> inner) {
+      this.inner = inner;
     }
 
     @Override
-    SerializableFunction<
-        TableSchema,
-        SerializableFunction<GenericRecord, TableRow>> getParseFnFactory() {
-      return TableRowParserFactory.INSTANCE;
+    public void populateDisplayData(DisplayData.Builder builder) {
+      this.inner.populateDisplayData(builder);
     }
 
-    @AutoValue.Builder
-    abstract static class Builder extends ReadBuilderBase<Read, Builder> { }
+    @Override
+    public void validate(PipelineOptions options) {
+      this.inner.validate(options);
+    }
+
+    public Read withoutValidation() { return new Read(this.inner.withoutValidation()); }
+
+    TableReference getTable() { return this.inner.getTable(); }
+    boolean getValidate() { return this.inner.getValidate(); }
+    ValueProvider<String> getQuery() { return this.inner.getQuery(); }
+
+    public Read from(String tableSpec) { return new Read(this.inner.from(tableSpec)); }
+    public Read from(TableReference table) { return new Read(this.inner.from(table)); }
+    public Read from(ValueProvider<String> tableSpec) { return new Read(this.inner.from(tableSpec)); }
+    public Read fromQuery(String query) { return new Read(this.inner.fromQuery(query)); }
+    public Read fromQuery(ValueProvider<String> query) { return new Read(this.inner.fromQuery(query)); }
+    public Read withoutResultFlattening() { return new Read(this.inner.withoutResultFlattening()); }
+    public Read withTestServices(BigQueryServices testServices) {
+      return new Read(this.inner.withTestServices(testServices));
+    }
+    public Read usingStandardSql() { return new Read(this.inner.usingStandardSql()); }
+    public Read withTemplateCompatibility() {
+      return new Read(this.inner.withTemplateCompatibility());
+    }
   }
 
   /////////////////////////////////////////////////////////////////////////////
@@ -406,46 +401,34 @@ public class BigQueryIO {
    */
   @AutoValue
   public abstract static class ReadGenericRecords<T>
-      extends ReadBase<T, ReadGenericRecords<T>, ReadGenericRecords.Builder<T>> {
-
+      extends PTransform<PBegin, PCollection<T>> {
     abstract Builder<T> toBuilder();
 
     @AutoValue.Builder
-    abstract static class Builder<T>
-        extends ReadBuilderBase<ReadGenericRecords<T>, Builder<T>> {
-      abstract Builder<T> setParseFnFactory(
-          SerializableFunction<TableSchema, SerializableFunction<GenericRecord, T>> parseFnFactory);
+    abstract static class Builder<T> {
+      abstract Builder<T> setJsonTableRef(ValueProvider<String> jsonTableRef);
+      abstract Builder<T> setQuery(ValueProvider<String> query);
+      abstract Builder<T> setValidate(boolean validate);
+      abstract Builder<T> setFlattenResults(Boolean flattenResults);
+      abstract Builder<T> setUseLegacySql(Boolean useLegacySql);
+      abstract Builder<T> setWithTemplateCompatibility(Boolean useTemplateCompatibility);
+      abstract Builder<T> setBigQueryServices(BigQueryServices bigQueryServices);
+      abstract ReadGenericRecords<T> build();
+
+      abstract Builder<T> setParseFn(
+          SerializableFunction<SchemaAndRecord, T> parseFn);
       abstract Builder<T> setCoder(Coder<T> coder);
     }
 
-    public ReadGenericRecords<T> withParseFnFactory(
-        SerializableFunction<TableSchema, SerializableFunction<GenericRecord, T>> parseFnFactory) {
-      return toBuilder().setParseFnFactory(parseFnFactory).build();
+    public ReadGenericRecords<T> withParseFn(
+        SerializableFunction<SchemaAndRecord, T> parseFn) {
+      return toBuilder().setParseFn(parseFn).build();
     }
 
     public ReadGenericRecords<T> withCoder(Coder<T> coder) {
       return toBuilder().setCoder(coder).build();
     }
-  }
 
-  /////////////////////////////////////////////////////////////////////////////
-
-  abstract static class ReadBuilderBase<ReadT, SelfT extends ReadBuilderBase<ReadT, SelfT>> {
-    abstract SelfT setJsonTableRef(ValueProvider<String> jsonTableRef);
-    abstract SelfT setQuery(ValueProvider<String> query);
-    abstract SelfT setValidate(boolean validate);
-    abstract SelfT setFlattenResults(Boolean flattenResults);
-    abstract SelfT setUseLegacySql(Boolean useLegacySql);
-    abstract SelfT setWithTemplateCompatibility(Boolean useTemplateCompatibility);
-    abstract SelfT setBigQueryServices(BigQueryServices bigQueryServices);
-    abstract ReadT build();
-  }
-
-  abstract static class ReadBase<
-      T,
-      SelfT extends ReadBase<T, SelfT, BuilderT>,
-      BuilderT extends ReadBuilderBase<SelfT, BuilderT>
-      > extends PTransform<PBegin, PCollection<T>> {
     @Nullable abstract ValueProvider<String> getJsonTableRef();
     @Nullable abstract ValueProvider<String> getQuery();
     abstract boolean getValidate();
@@ -456,13 +439,9 @@ public class BigQueryIO {
 
     abstract BigQueryServices getBigQueryServices();
 
-    @Nullable abstract SerializableFunction<
-        TableSchema,
-        SerializableFunction<GenericRecord, T>> getParseFnFactory();
+    @Nullable abstract SerializableFunction<SchemaAndRecord, T> getParseFn();
 
     @Nullable abstract Coder<T> getCoder();
-
-    abstract BuilderT toBuilder();
 
     @VisibleForTesting
     Coder<T> inferCoder(CoderRegistry coderRegistry) {
@@ -470,14 +449,8 @@ public class BigQueryIO {
         return getCoder();
       }
 
-      TypeDescriptor<SerializableFunction<GenericRecord, T>> parseFnDescriptor =
-          TypeDescriptors.outputOf(getParseFnFactory());
+      TypeDescriptor<T> descriptor = TypeDescriptors.outputOf(getParseFn());
 
-      TypeDescriptor<T> descriptor = TypeDescriptors.extractFromTypeParameters(
-          parseFnDescriptor,
-          SerializableFunction.class,
-          new TypeDescriptors.TypeVariableExtractor<SerializableFunction<GenericRecord, T>, T>() {}
-      );
       String message =
           "Unable to infer coder for output of parseFn. Specify it explicitly using withCoder().";
       checkArgument(descriptor != null, message);
@@ -496,7 +469,7 @@ public class BigQueryIO {
             getTableProvider(),
             getBigQueryServices(),
             coder,
-            getParseFnFactory());
+            getParseFn());
       } else {
         source =
             BigQueryQuerySource.create(
@@ -506,7 +479,7 @@ public class BigQueryIO {
                 getUseLegacySql(),
                 getBigQueryServices(),
                 coder,
-                getParseFnFactory());
+                getParseFn());
       }
       return source;
     }
@@ -596,8 +569,7 @@ public class BigQueryIO {
             getFlattenResults() != null, "flattenResults should not be null if query is set");
         checkArgument(getUseLegacySql() != null, "useLegacySql should not be null if query is set");
       }
-      checkArgument(getParseFnFactory() != null, "A parseFnFactory is required");
-
+      checkArgument(getParseFn() != null, "A parseFn is required");
 
       Pipeline p = input.getPipeline();
       final Coder<T> coder = inferCoder(p.getCoderRegistry());
@@ -767,12 +739,12 @@ public class BigQueryIO {
      * Reads a BigQuery table specified as {@code "[project_id]:[dataset_id].[table_id]"} or
      * {@code "[dataset_id].[table_id]"} for tables within the current project.
      */
-    public SelfT from(String tableSpec) {
+    public ReadGenericRecords<T> from(String tableSpec) {
       return from(StaticValueProvider.of(tableSpec));
     }
 
     /** Same as {@code from(String)}, but with a {@link ValueProvider}. */
-    public SelfT from(ValueProvider<String> tableSpec) {
+    public ReadGenericRecords<T> from(ValueProvider<String> tableSpec) {
       ensureFromNotCalledYet();
       return toBuilder()
           .setJsonTableRef(
@@ -792,14 +764,14 @@ public class BigQueryIO {
      * <p>By default, the query will use BigQuery's legacy SQL dialect. To use the BigQuery Standard
      * SQL dialect, use {@link Read#usingStandardSql}.
      */
-    public SelfT fromQuery(String query) {
+    public ReadGenericRecords<T> fromQuery(String query) {
       return fromQuery(StaticValueProvider.of(query));
     }
 
     /**
      * Same as {@code fromQuery(String)}, but with a {@link ValueProvider}.
      */
-    public SelfT fromQuery(ValueProvider<String> query) {
+    public ReadGenericRecords<T> fromQuery(ValueProvider<String> query) {
       ensureFromNotCalledYet();
       return toBuilder().setQuery(query).setFlattenResults(true).setUseLegacySql(true).build();
     }
@@ -807,7 +779,7 @@ public class BigQueryIO {
     /**
      * Read from table specified by a {@link TableReference}.
      */
-    public SelfT from(TableReference table) {
+    public ReadGenericRecords<T> from(TableReference table) {
       return from(StaticValueProvider.of(BigQueryHelpers.toTableSpec(table)));
     }
 
@@ -815,7 +787,7 @@ public class BigQueryIO {
      * Disable validation that the table exists or the query succeeds prior to pipeline submission.
      * Basic validation (such as ensuring that a query or table is specified) still occurs.
      */
-    public SelfT withoutValidation() {
+    public ReadGenericRecords<T> withoutValidation() {
       return toBuilder().setValidate(false).build();
     }
 
@@ -826,7 +798,7 @@ public class BigQueryIO {
      * <p>Only valid when a query is used ({@link #fromQuery}). Setting this option when reading
      * from a table will cause an error during validation.
      */
-    public SelfT withoutResultFlattening() {
+    public ReadGenericRecords<T> withoutResultFlattening() {
       return toBuilder().setFlattenResults(false).build();
     }
 
@@ -836,7 +808,7 @@ public class BigQueryIO {
      * <p>Only valid when a query is used ({@link #fromQuery}). Setting this option when reading
      * from a table will cause an error during validation.
      */
-    public SelfT usingStandardSql() {
+    public ReadGenericRecords<T> usingStandardSql() {
       return toBuilder().setUseLegacySql(false).build();
     }
 
@@ -847,12 +819,12 @@ public class BigQueryIO {
      * repeated template invocations. It does not support dynamic work rebalancing.
      */
     @Experimental(Experimental.Kind.SOURCE_SINK)
-    public SelfT withTemplateCompatibility() {
+    public ReadGenericRecords<T> withTemplateCompatibility() {
       return toBuilder().setWithTemplateCompatibility(true).build();
     }
 
     @VisibleForTesting
-    SelfT withTestServices(BigQueryServices testServices) {
+    ReadGenericRecords<T> withTestServices(BigQueryServices testServices) {
       return toBuilder().setBigQueryServices(testServices).build();
     }
   }
