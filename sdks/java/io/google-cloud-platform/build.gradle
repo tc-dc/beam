@@ -19,6 +19,7 @@
 import groovy.json.JsonOutput
 
 apply plugin: org.apache.beam.gradle.BeamModulePlugin
+
 applyJavaNature(
   enableFindbugs: false,
   // Override the default shading configuration to exclude everything since
@@ -107,4 +108,57 @@ task postCommit {
   group = "Verification"
   description = "Integration tests of GCP connectors using the DirectRunner."
   dependsOn integrationTest
+}
+
+apply plugin: 'java'
+apply plugin: 'maven'
+apply plugin: 'maven-publish'
+apply plugin: 'com.github.johnrengelman.shadow'
+
+publishing {
+    publications {
+        shadow(MavenPublication) { publication ->
+          groupId = "${projectGroupName}"
+          artifactId = "${project.name}"
+          version = "${projectVersionName}"
+
+          project.shadow.component(publication)
+          pom.withXml {                        
+            def dependency = asNode().dependencies[0].appendNode('dependency')
+            dependency.appendNode('groupId', group)
+            dependency.appendNode('artifactId', 'beam-sdks-java-core')
+            dependency.appendNode('version', version)            
+          }
+          pom.withXml {
+            def dependency = asNode().dependencies[0].appendNode('dependency')
+            dependency.appendNode('groupId', group)
+            dependency.appendNode('artifactId', 'beam-sdks-java-extensions-google-cloud-platform-core')
+            dependency.appendNode('version', version)            
+          }
+          pom.withXml {
+            def dependency = asNode().dependencies[0].appendNode('dependency')
+            dependency.appendNode('groupId', group)
+            dependency.appendNode('artifactId', 'beam-sdks-java-extensions-protobuf')
+            dependency.appendNode('version', version)            
+          }
+        }                    
+    }
+    repositories {
+        maven {           
+            url  "${artifactory_url}"
+            credentials {
+                username "${artifactory_username}"
+                password "${artifactory_password}"
+            }  
+        }
+    }
+}
+
+shadowJar {
+    into("META-INF/maven/$project.group/$project.name") {        
+        from { generatePomFileForShadowPublication }
+        rename ".*", "pom.xml"
+    }
+    classifier = ''
+    configurations = [project.configurations.compile]
 }
