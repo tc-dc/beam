@@ -1140,7 +1140,9 @@ public class BigtableIO {
     public void populateDisplayData(DisplayData.Builder builder) {
       super.populateDisplayData(builder);
 
-      builder.add(DisplayData.item("tableId", config.getTableId()).withLabel("Table ID"));
+      if (config.getValidate()) {
+        builder.add(DisplayData.item("tableId", config.getTableId()).withLabel("Table ID"));
+      }
 
       if (filter != null) {
         builder.add(DisplayData.item("rowFilter", filter.toString()).withLabel("Table Row Filter"));
