@@ -30,6 +30,7 @@ description = "Apache Beam :: Runners :: Google Cloud Dataflow"
  */
 evaluationDependsOn(":beam-sdks-java-io-google-cloud-platform")
 evaluationDependsOn(":beam-sdks-java-core")
+evaluationDependsOn(":beam-examples-java")
 
 processResources {
   filter org.apache.tools.ant.filters.ReplaceTokens, tokens: [
@@ -88,7 +89,8 @@ dependencies {
   validatesRunner project(path: project.path, configuration: "shadow")
   validatesRunner library.java.hamcrest_core
   validatesRunner library.java.hamcrest_library
-  examplesJavaIntegrationTest project(path: project.path, configuration: "shadow")  
+  examplesJavaIntegrationTest project(path: project.path, configuration: "shadow")
+  examplesJavaIntegrationTest project(path: ":beam-examples-java", configuration: "shadowTest")
   googleCloudPlatformIntegrationTest project(path: project.path, configuration: "shadow")
   googleCloudPlatformIntegrationTest project(path: ":beam-sdks-java-io-google-cloud-platform", configuration: "shadowTest")
 }
@@ -169,6 +171,7 @@ task examplesJavaIntegrationTest(type: Test) {
   exclude '**/WindowedWordCountIT.class'
   maxParallelForks 4
   classpath = configurations.examplesJavaIntegrationTest
+  testClassesDirs = files(project(":beam-examples-java").sourceSets.test.output.classesDirs)
   useJUnit { }
 }
 
@@ -197,68 +200,3 @@ createJavaExamplesArchetypeValidationTask(type: 'MobileGaming',
   gcsBucket: gcsBucket,
   bqDataset: bqDataset,
   pubsubTopic: pubsubTopic)
-
-apply plugin: 'java'
-apply plugin: 'maven'
-apply plugin: 'maven-publish'
-apply plugin: 'com.github.johnrengelman.shadow'
-
-publishing {
-    publications {
-        shadow(MavenPublication) { publication ->
-          groupId = "${projectGroupName}"
-          artifactId = "${project.name}"
-          version = "${projectVersionName}"
-          
-          project.shadow.component(publication)  
-          pom.withXml {                        
-            def dependency = asNode().dependencies[0].appendNode('dependency')
-            dependency.appendNode('groupId', group)
-            dependency.appendNode('artifactId', 'beam-model-pipeline')
-            dependency.appendNode('version', version)            
-          }
-          pom.withXml {
-            def dependency = asNode().dependencies[0].appendNode('dependency')
-            dependency.appendNode('groupId', group)
-            dependency.appendNode('artifactId', 'beam-sdks-java-core')
-            dependency.appendNode('version', version)            
-          }
-          pom.withXml {
-            def dependency = asNode().dependencies[0].appendNode('dependency')
-            dependency.appendNode('groupId', group)
-            dependency.appendNode('artifactId', 'beam-sdks-java-extensions-google-cloud-platform-core')
-            dependency.appendNode('version', version)            
-          }
-          pom.withXml {
-            def dependency = asNode().dependencies[0].appendNode('dependency')
-            dependency.appendNode('groupId', group)
-            dependency.appendNode('artifactId', 'beam-sdks-java-io-google-cloud-platform')
-            dependency.appendNode('version', version)            
-          }  
-          pom.withXml {
-            def dependency = asNode().dependencies[0].appendNode('dependency')
-            dependency.appendNode('groupId', group)
-            dependency.appendNode('artifactId', 'beam-runners-core-construction-java')
-            dependency.appendNode('version', version)            
-          }
-        }        
-    }
-    repositories {
-        maven {           
-            url  "${artifactory_url}"
-            credentials {
-                username "${artifactory_username}"
-                password "${artifactory_password}"
-            }  
-        }
-    }
-}
-
-shadowJar {
-    into("META-INF/maven/$project.group/$project.name") {        
-        from { generatePomFileForShadowPublication }
-        rename ".*", "pom.xml"
-    }
-    classifier = ''
-    configurations = [project.configurations.compile]
-}
