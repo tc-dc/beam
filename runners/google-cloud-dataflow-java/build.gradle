@@ -30,7 +30,6 @@ description = "Apache Beam :: Runners :: Google Cloud Dataflow"
  */
 evaluationDependsOn(":beam-sdks-java-io-google-cloud-platform")
 evaluationDependsOn(":beam-sdks-java-core")
-evaluationDependsOn(":beam-examples-java")
 
 processResources {
   filter org.apache.tools.ant.filters.ReplaceTokens, tokens: [
@@ -90,7 +89,6 @@ dependencies {
   validatesRunner library.java.hamcrest_core
   validatesRunner library.java.hamcrest_library
   examplesJavaIntegrationTest project(path: project.path, configuration: "shadow")
-  examplesJavaIntegrationTest project(path: ":beam-examples-java", configuration: "shadowTest")
   googleCloudPlatformIntegrationTest project(path: project.path, configuration: "shadow")
   googleCloudPlatformIntegrationTest project(path: ":beam-sdks-java-io-google-cloud-platform", configuration: "shadowTest")
 }
@@ -171,7 +169,6 @@ task examplesJavaIntegrationTest(type: Test) {
   exclude '**/WindowedWordCountIT.class'
   maxParallelForks 4
   classpath = configurations.examplesJavaIntegrationTest
-  testClassesDirs = files(project(":beam-examples-java").sourceSets.test.output.classesDirs)
   useJUnit { }
 }
 
