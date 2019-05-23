@@ -37,6 +37,8 @@ import org.apache.beam.vendor.guava.v20_0.com.google.common.cache.CacheBuilder;
 import org.apache.beam.vendor.guava.v20_0.com.google.common.cache.RemovalCause;
 import org.apache.beam.vendor.guava.v20_0.com.google.common.cache.Weigher;
 import org.apache.beam.vendor.guava.v20_0.com.google.common.collect.HashMultimap;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Process-wide cache of per-key state.
@@ -48,6 +50,8 @@ import org.apache.beam.vendor.guava.v20_0.com.google.common.collect.HashMultimap
  * thread at a time, so this is safe.
  */
 public class WindmillStateCache implements StatusDataProvider {
+  private static final Logger LOG = LoggerFactory.getLogger(WindmillStateCache.class);
+
   // Estimate of overhead per StateId.
   private static final int PER_STATE_ID_OVERHEAD = 20;
   // Initial size of hash tables per entry.
@@ -58,17 +62,24 @@ public class WindmillStateCache implements StatusDataProvider {
   private static final int PER_CACHE_ENTRY_OVERHEAD =
       16 + HASH_MAP_ENTRY_OVERHEAD * INITIAL_HASH_MAP_CAPACITY;
 
+  private long maxWeight;
   private Cache<StateId, StateCacheEntry> stateCache;
   private HashMultimap<ComputationKey, StateId> keyIndex =
       HashMultimap.<ComputationKey, StateId>create();
   private int displayedWeight = 0; // Only used for status pages and unit tests.
 
   public WindmillStateCache() {
+    this(100000000 /* 100 MB */);
+  }
+
+  public WindmillStateCache(long maxWeight) {
+    LOG.info("Initializing WindmillStateCache with maxWeight = {}", maxWeight);
+    this.maxWeight = maxWeight;
     final Weigher<Weighted, Weighted> weigher = Weighers.weightedKeysAndValues();
 
     stateCache =
         CacheBuilder.newBuilder()
-            .maximumWeight(100000000 /* 100 MB */)
+            .maximumWeight(maxWeight)
             .recordStats()
             .weigher(weigher)
             .removalListener(
@@ -349,11 +360,12 @@ public class WindmillStateCache implements StatusDataProvider {
   public void appendSummaryHtml(PrintWriter response) {
     response.println("Cache Stats: <br><table border=0>");
     response.println(
-        "<tr><th>Hit Ratio</th><th>Evictions</th><th>Size</th><th>Weight</th></tr><tr>");
+        "<tr><th>Hit Ratio</th><th>Evictions</th><th>Size</th><th>Weight</th><th>Max Weight</th></tr><tr>");
     response.println("<th>" + stateCache.stats().hitRate() + "</th>");
     response.println("<th>" + stateCache.stats().evictionCount() + "</th>");
     response.println("<th>" + stateCache.size() + "</th>");
-    response.println("<th>" + getWeight() + "</th>");
+    response.println("<th>" + String.format("%,d", getWeight()) + "</th>");
+    response.println("<th>" + String.format("%,d", maxWeight) + "</th>");
     response.println("</tr></table><br>");
   }
 

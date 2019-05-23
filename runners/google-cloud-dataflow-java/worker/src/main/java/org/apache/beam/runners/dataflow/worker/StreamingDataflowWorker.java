@@ -381,7 +381,7 @@ public class StreamingDataflowWorker {
   private final ConcurrentMap<String, String> systemNameToComputationIdMap =
       new ConcurrentHashMap<>();
 
-  private final WindmillStateCache stateCache = new WindmillStateCache();
+  private final WindmillStateCache stateCache;
 
   private final ThreadFactory threadFactory;
   private DataflowMapTaskExecutorFactory mapTaskExecutorFactory;
@@ -554,6 +554,7 @@ public class StreamingDataflowWorker {
       SdkHarnessRegistry sdkHarnessRegistry,
       boolean publishCounters)
       throws IOException {
+    this.stateCache = new WindmillStateCache(options.getWorkerCacheMb() * 1024 * 1024);
     this.mapTaskExecutorFactory = mapTaskExecutorFactory;
     this.workUnitClient = workUnitClient;
     this.options = options;
