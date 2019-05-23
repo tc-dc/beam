@@ -175,7 +175,7 @@ public class StreamingDataflowWorker {
   // Maximum work units retrieved from Windmill and queued before processing. Limiting this delays
   // retrieving extra work from Windmill without working on it, leading to better
   // prioritization / utilization.
-  static final int MAX_WORK_UNITS_QUEUED = 100;
+  static final int MAX_WORK_UNITS_QUEUED = 200;
   static final long TARGET_COMMIT_BUNDLE_BYTES = 32 << 20;
   static final int MAX_COMMIT_QUEUE_BYTES = 500 << 20; // 500MB
   static final int NUM_COMMIT_STREAMS = 1;
@@ -381,7 +381,7 @@ public class StreamingDataflowWorker {
   private final ConcurrentMap<String, String> systemNameToComputationIdMap =
       new ConcurrentHashMap<>();
 
-  private final WindmillStateCache stateCache = new WindmillStateCache();
+  private final WindmillStateCache stateCache;
 
   private final ThreadFactory threadFactory;
   private DataflowMapTaskExecutorFactory mapTaskExecutorFactory;
@@ -554,6 +554,7 @@ public class StreamingDataflowWorker {
       SdkHarnessRegistry sdkHarnessRegistry,
       boolean publishCounters)
       throws IOException {
+    this.stateCache = new WindmillStateCache(options.getWorkerCacheMb() * 1024 * 1024);
     this.mapTaskExecutorFactory = mapTaskExecutorFactory;
     this.workUnitClient = workUnitClient;
     this.options = options;
