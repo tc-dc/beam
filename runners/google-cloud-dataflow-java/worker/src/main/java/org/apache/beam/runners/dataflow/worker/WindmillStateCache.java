@@ -103,6 +103,14 @@ public class WindmillStateCache implements StatusDataProvider {
     return displayedWeight;
   }
 
+  public long getEvictionCount() {
+    return stateCache.stats().evictionCount();
+  }
+
+  public double getHitRate() {
+    return stateCache.stats().hitRate();
+  }
+
   /** Per-computation view of the state cache. */
   public class ForComputation {
     private final String computation;
@@ -361,8 +369,8 @@ public class WindmillStateCache implements StatusDataProvider {
     response.println("Cache Stats: <br><table border=0>");
     response.println(
         "<tr><th>Hit Ratio</th><th>Evictions</th><th>Size</th><th>Weight</th><th>Max Weight</th></tr><tr>");
-    response.println("<th>" + stateCache.stats().hitRate() + "</th>");
-    response.println("<th>" + stateCache.stats().evictionCount() + "</th>");
+    response.println("<th>" + getHitRate() + "</th>");
+    response.println("<th>" + getEvictionCount() + "</th>");
     response.println("<th>" + stateCache.size() + "</th>");
     response.println("<th>" + String.format("%,d", getWeight()) + "</th>");
     response.println("<th>" + String.format("%,d", maxWeight) + "</th>");

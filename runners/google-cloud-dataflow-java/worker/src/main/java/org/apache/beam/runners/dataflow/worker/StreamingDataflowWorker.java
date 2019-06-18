@@ -66,6 +66,7 @@ import org.apache.beam.model.pipeline.v1.RunnerApi;
 import org.apache.beam.runners.core.metrics.ExecutionStateSampler;
 import org.apache.beam.runners.core.metrics.ExecutionStateTracker;
 import org.apache.beam.runners.dataflow.DataflowRunner;
+import org.apache.beam.runners.dataflow.WorkerMetricsReceiver;
 import org.apache.beam.runners.dataflow.internal.CustomSources;
 import org.apache.beam.runners.dataflow.options.DataflowWorkerHarnessOptions;
 import org.apache.beam.runners.dataflow.util.CloudObject;
@@ -77,6 +78,7 @@ import org.apache.beam.runners.dataflow.worker.StreamingDataflowWorker.Work.Stat
 import org.apache.beam.runners.dataflow.worker.StreamingModeExecutionContext.StreamingModeExecutionStateRegistry;
 import org.apache.beam.runners.dataflow.worker.apiary.FixMultiOutputInfosOnParDoInstructions;
 import org.apache.beam.runners.dataflow.worker.counters.Counter;
+import org.apache.beam.runners.dataflow.worker.counters.CounterName;
 import org.apache.beam.runners.dataflow.worker.counters.CounterSet;
 import org.apache.beam.runners.dataflow.worker.counters.DataflowCounterUpdateExtractor;
 import org.apache.beam.runners.dataflow.worker.counters.NameContext;
@@ -126,6 +128,7 @@ import org.apache.beam.sdk.util.FluentBackoff;
 import org.apache.beam.sdk.util.Sleeper;
 import org.apache.beam.sdk.util.UserCodeException;
 import org.apache.beam.sdk.util.WindowedValue.WindowedValueCoder;
+import org.apache.beam.sdk.util.common.ReflectHelpers;
 import org.apache.beam.vendor.grpc.v1p13p1.com.google.protobuf.ByteString;
 import org.apache.beam.vendor.grpc.v1p13p1.com.google.protobuf.TextFormat;
 import org.apache.beam.vendor.guava.v20_0.com.google.common.annotations.VisibleForTesting;
@@ -133,6 +136,7 @@ import org.apache.beam.vendor.guava.v20_0.com.google.common.base.Optional;
 import org.apache.beam.vendor.guava.v20_0.com.google.common.base.Preconditions;
 import org.apache.beam.vendor.guava.v20_0.com.google.common.base.Splitter;
 import org.apache.beam.vendor.guava.v20_0.com.google.common.collect.EvictingQueue;
+import org.apache.beam.vendor.guava.v20_0.com.google.common.collect.ImmutableList;
 import org.apache.beam.vendor.guava.v20_0.com.google.common.collect.ImmutableMap;
 import org.apache.beam.vendor.guava.v20_0.com.google.common.collect.Iterables;
 import org.apache.beam.vendor.guava.v20_0.com.google.common.collect.ListMultimap;
@@ -415,6 +419,10 @@ public class StreamingDataflowWorker {
   private final Counter<Long, Long> javaHarnessUsedMemory;
   private final Counter<Long, Long> javaHarnessMaxMemory;
   private final Counter<Integer, Integer> windmillMaxObservedWorkItemCommitBytes;
+  private final Counter<Long, Long> stateCacheWeight;
+  private final Counter<Long, Long> stateCacheMaxWeight;
+  private final Counter<Long, Long> stateCacheEvictions;
+  private final Counter<Double, Double> stateCacheHitRate;
   private Timer refreshActiveWorkTimer;
   private Timer statusPageTimer;
 
@@ -458,6 +466,8 @@ public class StreamingDataflowWorker {
 
   private final ReaderRegistry readerRegistry = ReaderRegistry.defaultRegistry();
   private final SinkRegistry sinkRegistry = SinkRegistry.defaultRegistry();
+
+  private final Iterable<WorkerMetricsReceiver> workerMetricReceivers;
 
   /** Contains a few of the stage specific fields. E.g. metrics container registry, counters etc. */
   private static class StageInfo {
@@ -559,7 +569,8 @@ public class StreamingDataflowWorker {
       SdkHarnessRegistry sdkHarnessRegistry,
       boolean publishCounters)
       throws IOException {
-    this.stateCache = new WindmillStateCache(options.getWorkerCacheMb() * 1024 * 1024);
+    int maxStateCacheWeight = options.getWorkerCacheMb() * 1024 * 1024;
+    this.stateCache = new WindmillStateCache(maxStateCacheWeight);
     this.mapTaskExecutorFactory = mapTaskExecutorFactory;
     this.workUnitClient = workUnitClient;
     this.options = options;
@@ -567,6 +578,7 @@ public class StreamingDataflowWorker {
     this.windmillServiceEnabled = options.isEnableStreamingEngine();
     this.memoryMonitor = MemoryMonitor.fromOptions(options);
     this.statusPages = WorkerStatusPages.create(DEFAULT_STATUS_PORT, memoryMonitor);
+    this.workerMetricReceivers = ReflectHelpers.loadServicesOrdered(WorkerMetricsReceiver.class);
     if (windmillServiceEnabled) {
       this.debugCaptureManager =
           new DebugCapture.Manager(options, statusPages.getDebugCapturePages());
@@ -592,7 +604,21 @@ public class StreamingDataflowWorker {
     this.windmillMaxObservedWorkItemCommitBytes =
         pendingCumulativeCounters.intMax(
             StreamingSystemCounterNames.WINDMILL_MAX_WORK_ITEM_COMMIT_BYTES.counterName());
+    this.stateCacheWeight =
+        pendingCumulativeCounters.longSum(
+            StreamingSystemCounterNames.STATE_CACHE_WEIGHT.counterName());
+    this.stateCacheMaxWeight =
+        pendingCumulativeCounters.longSum(
+            StreamingSystemCounterNames.STATE_CACHE_MAX_WEIGHT.counterName());
+    this.stateCacheHitRate =
+        pendingCumulativeCounters.doubleSum(
+            StreamingSystemCounterNames.STATE_CACHE_HIT_RATE.counterName());
+    this.stateCacheEvictions =
+        pendingCumulativeCounters.longSum(
+            StreamingSystemCounterNames.STATE_CACHE_EVICTIONS.counterName());
     this.isDoneFuture = new CompletableFuture<>();
+
+    this.stateCacheMaxWeight.addValue((long) maxStateCacheWeight);
 
     this.threadFactory =
         r -> {
@@ -1819,6 +1845,7 @@ public class StreamingDataflowWorker {
   @VisibleForTesting
   public void reportPeriodicWorkerUpdates() {
     updateVMMetrics();
+    updateStateCacheStats();
     try {
       sendWorkerUpdatesToDataflowService(pendingDeltaCounters, pendingCumulativeCounters);
     } catch (IOException e) {
@@ -1843,6 +1870,17 @@ public class StreamingDataflowWorker {
     return key;
   }
 
+  private void updateStateCacheStats() {
+    stateCacheWeight.getAndReset();
+    stateCacheWeight.addValue(stateCache.getWeight());
+
+    stateCacheEvictions.getAndReset();
+    stateCacheEvictions.addValue(stateCache.getEvictionCount());
+
+    stateCacheHitRate.getAndReset();
+    stateCacheHitRate.addValue(stateCache.getHitRate());
+  }
+
   /** Sends counter updates to Dataflow backend. */
   private void sendWorkerUpdatesToDataflowService(
       CounterSet deltaCounters, CounterSet cumulativeCounters) throws IOException {
@@ -1859,6 +1897,8 @@ public class StreamingDataflowWorker {
       counterUpdates.addAll(
           deltaCounters.extractModifiedDeltaUpdates(DataflowCounterUpdateExtractor.INSTANCE));
     }
+
+    publishCounterUpdates(counterUpdates);
 
     // Handle duplicate counters from different stages. Store all the counters in a multi-map and
     // send the counters that appear multiple times in separate RPCs. Same logical counter could
@@ -1926,6 +1966,16 @@ public class StreamingDataflowWorker {
           new WorkItemStatus()
               .setWorkItemId(WINDMILL_COUNTER_UPDATE_WORK_ID)
               .setCounterUpdates(counterUpdates));
+    }
+  }
+
+  private void publishCounterUpdates(List<CounterUpdate> updates) {
+    try {
+      for (WorkerMetricsReceiver receiver : workerMetricReceivers) {
+        receiver.receiverCounterUpdates(updates);
+      }
+    } catch (Exception e) {
+      LOG.error("Error publishing counter updates", e);
     }
   }
 
