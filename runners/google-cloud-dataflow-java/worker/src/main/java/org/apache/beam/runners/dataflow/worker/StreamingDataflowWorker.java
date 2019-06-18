@@ -78,7 +78,6 @@ import org.apache.beam.runners.dataflow.worker.StreamingDataflowWorker.Work.Stat
 import org.apache.beam.runners.dataflow.worker.StreamingModeExecutionContext.StreamingModeExecutionStateRegistry;
 import org.apache.beam.runners.dataflow.worker.apiary.FixMultiOutputInfosOnParDoInstructions;
 import org.apache.beam.runners.dataflow.worker.counters.Counter;
-import org.apache.beam.runners.dataflow.worker.counters.CounterName;
 import org.apache.beam.runners.dataflow.worker.counters.CounterSet;
 import org.apache.beam.runners.dataflow.worker.counters.DataflowCounterUpdateExtractor;
 import org.apache.beam.runners.dataflow.worker.counters.NameContext;
@@ -136,7 +135,6 @@ import org.apache.beam.vendor.guava.v20_0.com.google.common.base.Optional;
 import org.apache.beam.vendor.guava.v20_0.com.google.common.base.Preconditions;
 import org.apache.beam.vendor.guava.v20_0.com.google.common.base.Splitter;
 import org.apache.beam.vendor.guava.v20_0.com.google.common.collect.EvictingQueue;
-import org.apache.beam.vendor.guava.v20_0.com.google.common.collect.ImmutableList;
 import org.apache.beam.vendor.guava.v20_0.com.google.common.collect.ImmutableMap;
 import org.apache.beam.vendor.guava.v20_0.com.google.common.collect.Iterables;
 import org.apache.beam.vendor.guava.v20_0.com.google.common.collect.ListMultimap;
@@ -184,7 +182,6 @@ public class StreamingDataflowWorker {
   static final int MAX_WORK_UNITS_QUEUED = 100;
   static final long TARGET_COMMIT_BUNDLE_BYTES = 32 << 20;
   static final int MAX_COMMIT_QUEUE_BYTES = 500 << 20; // 500MB
-  static final int NUM_COMMIT_STREAMS = 1;
   static final Duration COMMIT_STREAM_TIMEOUT = Duration.standardMinutes(1);
 
   private static final int DEFAULT_STATUS_PORT = 8081;
@@ -666,7 +663,7 @@ public class StreamingDataflowWorker {
               @Override
               public void run() {
                 if (windmillServiceEnabled) {
-                  streamingCommitLoop();
+                  streamingCommitLoop(options.getNumCommitStreams());
                 } else {
                   commitLoop();
                 }
@@ -678,7 +675,12 @@ public class StreamingDataflowWorker {
     this.publishCounters = publishCounters;
     this.windmillServer = options.getWindmillServerStub();
     this.metricTrackingWindmillServer =
-        new MetricTrackingWindmillServerStub(windmillServer, memoryMonitor, windmillServiceEnabled);
+        new MetricTrackingWindmillServerStub(
+            windmillServer,
+            memoryMonitor,
+            windmillServiceEnabled,
+            options.getNumGetDataStreams(),
+            options.getNumGetDataThreads());
     this.metricTrackingWindmillServer.start();
     this.stateFetcher = new StateFetcher(metricTrackingWindmillServer);
     this.clientId = clientIdGenerator.nextLong();
@@ -1484,10 +1486,9 @@ public class StreamingDataflowWorker {
     }
   }
 
-  private void streamingCommitLoop() {
+  private void streamingCommitLoop(int numCommitStreams) {
     StreamPool<CommitWorkStream> streamPool =
-        new StreamPool<>(
-            NUM_COMMIT_STREAMS, COMMIT_STREAM_TIMEOUT, windmillServer::commitWorkStream);
+        new StreamPool<>(numCommitStreams, COMMIT_STREAM_TIMEOUT, windmillServer::commitWorkStream);
     Commit commit = null;
     while (running.get()) {
       // Batch commits as long as there are more and we can fit them in the current request.
