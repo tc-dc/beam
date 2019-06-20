@@ -43,7 +43,8 @@ public class DataflowSystemMetrics {
     STATE_CACHE_WEIGHT("state_cache_weight"),
     STATE_CACHE_MAX_WEIGHT("state_cache_max_weight"),
     STATE_CACHE_HIT_RATE("state_cache_hit_rate"),
-    STATE_CACHE_EVICTIONS("state_cache_evictions");
+    STATE_CACHE_EVICTIONS("state_cache_evictions"),
+    COMMIT_DURATION_MS("commit_duration_ms");
 
     private final String name;
 

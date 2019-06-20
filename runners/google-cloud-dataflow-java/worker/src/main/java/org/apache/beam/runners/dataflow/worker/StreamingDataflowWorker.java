@@ -78,6 +78,7 @@ import org.apache.beam.runners.dataflow.worker.StreamingDataflowWorker.Work.Stat
 import org.apache.beam.runners.dataflow.worker.StreamingModeExecutionContext.StreamingModeExecutionStateRegistry;
 import org.apache.beam.runners.dataflow.worker.apiary.FixMultiOutputInfosOnParDoInstructions;
 import org.apache.beam.runners.dataflow.worker.counters.Counter;
+import org.apache.beam.runners.dataflow.worker.counters.CounterFactory;
 import org.apache.beam.runners.dataflow.worker.counters.CounterSet;
 import org.apache.beam.runners.dataflow.worker.counters.DataflowCounterUpdateExtractor;
 import org.apache.beam.runners.dataflow.worker.counters.NameContext;
@@ -342,9 +343,10 @@ public class StreamingDataflowWorker {
 
   // Value class for a queued commit.
   static class Commit {
-    private Windmill.WorkItemCommitRequest request;
-    private ComputationState computationState;
-    private Work work;
+    private final Windmill.WorkItemCommitRequest request;
+    private final ComputationState computationState;
+    private final Work work;
+    private final Instant commitCreateTime;
 
     public Commit(
         Windmill.WorkItemCommitRequest request, ComputationState computationState, Work work) {
@@ -352,6 +354,7 @@ public class StreamingDataflowWorker {
       assert request.getSerializedSize() > 0;
       this.computationState = computationState;
       this.work = work;
+      this.commitCreateTime = Instant.now();
     }
 
     public Windmill.WorkItemCommitRequest getRequest() {
@@ -368,6 +371,10 @@ public class StreamingDataflowWorker {
 
     public int getSize() {
       return request.getSerializedSize();
+    }
+
+    public Instant getCommitCreateTime() {
+      return commitCreateTime;
     }
   }
 
@@ -420,6 +427,7 @@ public class StreamingDataflowWorker {
   private final Counter<Long, Long> stateCacheMaxWeight;
   private final Counter<Long, Long> stateCacheEvictions;
   private final Counter<Double, Double> stateCacheHitRate;
+  private final Counter<Long, CounterFactory.CounterDistribution> commitDurationMs;
   private Timer refreshActiveWorkTimer;
   private Timer statusPageTimer;
 
@@ -613,6 +621,9 @@ public class StreamingDataflowWorker {
     this.stateCacheEvictions =
         pendingCumulativeCounters.longSum(
             StreamingSystemCounterNames.STATE_CACHE_EVICTIONS.counterName());
+    this.commitDurationMs =
+        pendingDeltaCounters.distribution(
+            StreamingSystemCounterNames.COMMIT_DURATION_MS.counterName());
     this.isDoneFuture = new CompletableFuture<>();
 
     this.stateCacheMaxWeight.addValue((long) maxStateCacheWeight);
@@ -1444,6 +1455,7 @@ public class StreamingDataflowWorker {
       Windmill.CommitWorkRequest.Builder commitRequestBuilder =
           Windmill.CommitWorkRequest.newBuilder();
       long commitBytes = 0;
+      List<Instant> commitStartTimes = new ArrayList<>();
       // Block until we have a commit, then batch with additional commits.
       Commit commit = null;
       try {
@@ -1453,6 +1465,7 @@ public class StreamingDataflowWorker {
         continue;
       }
       while (commit != null) {
+        commitStartTimes.add(commit.getCommitCreateTime());
         ComputationState computationState = commit.getComputationState();
         commit.getWork().setState(State.COMMITTING);
         Windmill.ComputationCommitWorkRequest.Builder computationRequestBuilder =
@@ -1476,6 +1489,12 @@ public class StreamingDataflowWorker {
       activeCommitBytes.set(commitBytes);
       commitWork(commitRequest);
       activeCommitBytes.set(0);
+
+      Instant commitEndTime = Instant.now();
+      for (Instant commitStartTime : commitStartTimes) {
+        commitDurationMs.addValue(commitEndTime.getMillis() - commitStartTime.getMillis());
+      }
+
       for (Map.Entry<ComputationState, Windmill.ComputationCommitWorkRequest.Builder> entry :
           computationRequestMap.entrySet()) {
         ComputationState computationState = entry.getKey();
@@ -1496,6 +1515,7 @@ public class StreamingDataflowWorker {
       // we have a commit.
       CommitWorkStream commitStream = null;
       int commits = 0;
+
       while (running.get()) {
         // There may be a commit left over from the previous iteration but if not, pull one.
         if (commit == null) {
@@ -1521,7 +1541,9 @@ public class StreamingDataflowWorker {
         final ComputationState state = commit.getComputationState();
         final Windmill.WorkItemCommitRequest request = commit.getRequest();
         final int size = commit.getSize();
+        final Instant commitCreateTime = commit.getCommitCreateTime();
         commit.getWork().setState(State.COMMITTING);
+
         if (commitStream == null) {
           commitStream = streamPool.getStream();
         }
@@ -1534,6 +1556,8 @@ public class StreamingDataflowWorker {
               }
               state.completeWork(request.getKey(), request.getWorkToken());
               activeCommitBytes.addAndGet(-size);
+              commitDurationMs.addValue(
+                  Instant.now().getMillis() - commitCreateTime.getMillis());
             })) {
           // The commit was consumed.
           commit = null;
