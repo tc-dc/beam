@@ -79,7 +79,7 @@ def excluded_dependencies = [
 ]
 
 applyJavaNature(
-        publish: false,
+        publish: true,
         exportJavadoc: false,
         enableSpotbugs: false /* TODO(BEAM-5658): enable spotbugs */,
         shadowJarValidationExcludes: [
