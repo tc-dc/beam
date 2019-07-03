@@ -56,6 +56,7 @@ import java.util.concurrent.Semaphore;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 import javax.annotation.Nullable;
@@ -180,7 +181,7 @@ public class StreamingDataflowWorker {
   // Maximum work units retrieved from Windmill and queued before processing. Limiting this delays
   // retrieving extra work from Windmill without working on it, leading to better
   // prioritization / utilization.
-  static final int MAX_WORK_UNITS_QUEUED = 100;
+  static final int MAX_WORK_UNITS_QUEUED = 500;
   static final long TARGET_COMMIT_BUNDLE_BYTES = 32 << 20;
   static final int MAX_COMMIT_QUEUE_BYTES = 500 << 20; // 500MB
   static final Duration COMMIT_STREAM_TIMEOUT = Duration.standardMinutes(1);
@@ -399,6 +400,7 @@ public class StreamingDataflowWorker {
   private final ThreadFactory threadFactory;
   private DataflowMapTaskExecutorFactory mapTaskExecutorFactory;
   private final BoundedQueueExecutor workUnitExecutor;
+  private final BoundedQueueExecutor dispatchExecutor;
   private final WindmillServerStub windmillServer;
   private final Thread dispatchThread;
   private final Thread commitThread;
@@ -428,6 +430,10 @@ public class StreamingDataflowWorker {
   private final Counter<Long, Long> stateCacheEvictions;
   private final Counter<Double, Double> stateCacheHitRate;
   private final Counter<Long, CounterFactory.CounterDistribution> commitDurationMs;
+  private final Counter<Long, Long> workItemsReceived;
+  private final Counter<Long, Long> getWorkItemBatchesReceived;
+  private final Counter<Long, Long> computationWorkItemsReceived;
+  private final Counter<Long, Long> getWorkItemWaitTimeMs;
   private Timer refreshActiveWorkTimer;
   private Timer statusPageTimer;
 
@@ -624,6 +630,18 @@ public class StreamingDataflowWorker {
     this.commitDurationMs =
         pendingDeltaCounters.distribution(
             StreamingSystemCounterNames.COMMIT_DURATION_MS.counterName());
+    this.getWorkItemBatchesReceived =
+        pendingDeltaCounters.longSum(
+            StreamingSystemCounterNames.GET_WORK_ITEM_BATCHES_RECEIVED.counterName());
+    this.workItemsReceived =
+        pendingDeltaCounters.longSum(
+            StreamingSystemCounterNames.WORK_ITEMS_RECEIVED.counterName());
+    this.computationWorkItemsReceived =
+        pendingDeltaCounters.longSum(
+            StreamingSystemCounterNames.COMPUTATION_WORK_ITEMS_RECEIVED.counterName());
+    this.getWorkItemWaitTimeMs =
+        pendingDeltaCounters.longSum(
+            StreamingSystemCounterNames.GET_WORK_ITEM_WAIT_TIME_MS.counterName());
     this.isDoneFuture = new CompletableFuture<>();
 
     this.stateCacheMaxWeight.addValue((long) maxStateCacheWeight);
@@ -634,6 +652,19 @@ public class StreamingDataflowWorker {
           t.setDaemon(true);
           return t;
         };
+
+    ThreadFactory dispatchThreadFactory = new ThreadFactory() {
+      private final AtomicInteger threadId = new AtomicInteger();
+
+      @Override
+      public Thread newThread(Runnable r) {
+        Thread t = new Thread(r);
+        t.setName("DispatchExecutor-" + threadId.incrementAndGet());
+        t.setDaemon(true);
+        return t;
+      }
+    };
+
     this.workUnitExecutor =
         new BoundedQueueExecutor(
             chooseMaximumNumberOfThreads(),
@@ -641,6 +672,13 @@ public class StreamingDataflowWorker {
             TimeUnit.SECONDS,
             MAX_WORK_UNITS_QUEUED,
             threadFactory);
+    this.dispatchExecutor =
+        new BoundedQueueExecutor(
+            1,
+            THREAD_EXPIRATION_TIME_SEC,
+            TimeUnit.SECONDS,
+            3,
+            dispatchThreadFactory);
 
     maxSinkBytes =
         hasExperiment(options, "disable_limiting_bundle_sink_bytes")
@@ -665,7 +703,7 @@ public class StreamingDataflowWorker {
                 LOG.info("Dispatch done");
               }
             });
-    dispatchThread.setPriority(Thread.MIN_PRIORITY);
+    //dispatchThread.setPriority(Thread.MIN_PRIORITY);
     dispatchThread.setName("DispatchThread");
 
     commitThread =
@@ -984,9 +1022,27 @@ public class StreamingDataflowWorker {
         } catch (WindmillServerStub.RpcException e) {
           LOG.warn("GetWork failed, retrying:", e);
         }
+        getWorkItemWaitTimeMs.addValue((long) backoff);
         sleep(backoff);
-        backoff = Math.min(1000, backoff * 2);
+        backoff = Math.min(50, backoff * 2);
       } while (running.get());
+
+      dispatchExecutor.execute(new DispatchWorkRunnable(workResponse));
+    }
+  }
+
+  private class DispatchWorkRunnable implements Runnable {
+    private final Windmill.GetWorkResponse workResponse;
+
+    DispatchWorkRunnable(Windmill.GetWorkResponse workResponse) {
+      this.workResponse = workResponse;
+    }
+
+    @Override
+    public void run() {
+      workItemsReceived.addValue((long) workResponse.getWorkCount());
+      getWorkItemBatchesReceived.addValue(1L);
+
       for (final Windmill.ComputationWorkItems computationWork : workResponse.getWorkList()) {
         final String computationId = computationWork.getComputationId();
         final ComputationState computationState = getComputationState(computationId);
@@ -1001,10 +1057,11 @@ public class StreamingDataflowWorker {
         final Instant inputDataWatermark =
             WindmillTimeUtils.windmillToHarnessWatermark(computationWork.getInputDataWatermark());
         Preconditions.checkNotNull(inputDataWatermark);
-        @Nullable
-        final Instant synchronizedProcessingTime =
+        @Nullable final Instant synchronizedProcessingTime =
             WindmillTimeUtils.windmillToHarnessWatermark(
                 computationWork.getDependentRealtimeInputWatermark());
+
+        computationWorkItemsReceived.addValue((long) computationWork.getWorkCount());
         for (final Windmill.WorkItem workItem : computationWork.getWorkList()) {
           scheduleWorkItem(
               computationState, inputDataWatermark, synchronizedProcessingTime, workItem);

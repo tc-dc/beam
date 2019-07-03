@@ -44,7 +44,13 @@ public class DataflowSystemMetrics {
     STATE_CACHE_MAX_WEIGHT("state_cache_max_weight"),
     STATE_CACHE_HIT_RATE("state_cache_hit_rate"),
     STATE_CACHE_EVICTIONS("state_cache_evictions"),
-    COMMIT_DURATION_MS("commit_duration_ms");
+    COMMIT_DURATION_MS("commit_duration_ms"),
+    WORK_ITEMS_RECEIVED("work_items_received"),
+    GET_WORK_ITEM_BATCHES_RECEIVED("get_work_item_batches_received"),
+    WORK_ITEMS_PER_BATCH("work_items_per_batch"),
+    COMPUTATION_WORK_ITEMS_RECEIVED("computation_work_items_received"),
+    GET_WORK_ITEM_WAIT_TIME_MS("get_work_item_wait_time_ms")
+    ;
 
     private final String name;
 
