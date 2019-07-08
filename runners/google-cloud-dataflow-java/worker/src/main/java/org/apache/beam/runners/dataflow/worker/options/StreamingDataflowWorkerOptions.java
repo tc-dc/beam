@@ -107,6 +107,11 @@ public interface StreamingDataflowWorkerOptions extends DataflowWorkerHarnessOpt
 
   void setNumGetDataThreads(int value);
 
+  @Default.Integer(1)
+  int getNumDispatchThreads();
+
+  void setNumDispatchThreads(int value);
+
   /**
    * Factory for creating local Windmill address. Reads from system propery 'windmill.hostport' for
    * backwards compatibility.

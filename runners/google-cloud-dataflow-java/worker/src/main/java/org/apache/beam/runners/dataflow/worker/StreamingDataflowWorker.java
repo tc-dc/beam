@@ -54,6 +54,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -402,7 +403,7 @@ public class StreamingDataflowWorker {
   private final BoundedQueueExecutor workUnitExecutor;
   private final BoundedQueueExecutor dispatchExecutor;
   private final WindmillServerStub windmillServer;
-  private final Thread dispatchThread;
+  private final Thread[] dispatchThreads;
   private final Thread commitThread;
   private final AtomicLong activeCommitBytes = new AtomicLong();
   private final AtomicBoolean running = new AtomicBoolean();
@@ -430,10 +431,14 @@ public class StreamingDataflowWorker {
   private final Counter<Long, Long> stateCacheEvictions;
   private final Counter<Double, Double> stateCacheHitRate;
   private final Counter<Long, CounterFactory.CounterDistribution> commitDurationMs;
+  private final Counter<Long, CounterFactory.CounterDistribution> commitSizeBytes;
   private final Counter<Long, Long> workItemsReceived;
   private final Counter<Long, Long> getWorkItemBatchesReceived;
   private final Counter<Long, Long> computationWorkItemsReceived;
   private final Counter<Long, Long> getWorkItemWaitTimeMs;
+  private final Counter<Long, Long> stateFetches;
+  private final Counter<Long, CounterFactory.CounterDistribution> stateFetchLatencyMs;
+  private final Counter<Long, CounterFactory.CounterDistribution> itemsPerStateFetch;
   private Timer refreshActiveWorkTimer;
   private Timer statusPageTimer;
 
@@ -587,7 +592,12 @@ public class StreamingDataflowWorker {
     this.options = options;
     this.sdkHarnessRegistry = sdkHarnessRegistry;
     this.windmillServiceEnabled = options.isEnableStreamingEngine();
-    this.memoryMonitor = MemoryMonitor.fromOptions(options);
+    this.memoryMonitor = MemoryMonitor.fromOptions(
+        options,
+        this.pendingDeltaCounters.longSum(
+            StreamingSystemCounterNames.MEMORY_MONITOR_NUM_PUSHBACKS.counterName()),
+        this.pendingCumulativeCounters.longSum(
+            StreamingSystemCounterNames.MEMORY_MONITOR_IS_THRASHING.counterName()));
     this.statusPages = WorkerStatusPages.create(DEFAULT_STATUS_PORT, memoryMonitor);
     this.workerMetricReceivers = ReflectHelpers.loadServicesOrdered(WorkerMetricsReceiver.class);
     if (windmillServiceEnabled) {
@@ -630,6 +640,9 @@ public class StreamingDataflowWorker {
     this.commitDurationMs =
         pendingDeltaCounters.distribution(
             StreamingSystemCounterNames.COMMIT_DURATION_MS.counterName());
+    this.commitSizeBytes =
+        pendingDeltaCounters.distribution(
+            StreamingSystemCounterNames.COMMIT_SIZE_BYTES.counterName());
     this.getWorkItemBatchesReceived =
         pendingDeltaCounters.longSum(
             StreamingSystemCounterNames.GET_WORK_ITEM_BATCHES_RECEIVED.counterName());
@@ -642,6 +655,15 @@ public class StreamingDataflowWorker {
     this.getWorkItemWaitTimeMs =
         pendingDeltaCounters.longSum(
             StreamingSystemCounterNames.GET_WORK_ITEM_WAIT_TIME_MS.counterName());
+    this.stateFetches =
+        pendingDeltaCounters.longSum(
+            StreamingSystemCounterNames.STATE_FETCH_BATCHES.counterName());
+    this.itemsPerStateFetch =
+        pendingDeltaCounters.distribution(
+            StreamingSystemCounterNames.STATE_FETCH_BATCH_SIZE.counterName());
+    this.stateFetchLatencyMs =
+        pendingDeltaCounters.distribution(
+            StreamingSystemCounterNames.STATE_FETCH_LATENCY_MS.counterName());
     this.isDoneFuture = new CompletableFuture<>();
 
     this.stateCacheMaxWeight.addValue((long) maxStateCacheWeight);
@@ -679,7 +701,6 @@ public class StreamingDataflowWorker {
             TimeUnit.SECONDS,
             3,
             dispatchThreadFactory);
-
     maxSinkBytes =
         hasExperiment(options, "disable_limiting_bundle_sink_bytes")
             ? Long.MAX_VALUE
@@ -689,22 +710,28 @@ public class StreamingDataflowWorker {
     memoryMonitorThread.setPriority(Thread.MIN_PRIORITY);
     memoryMonitorThread.setName("MemoryMonitor");
 
-    dispatchThread =
-        threadFactory.newThread(
-            new Runnable() {
-              @Override
-              public void run() {
-                LOG.info("Dispatch starting");
-                if (windmillServiceEnabled) {
-                  streamingDispatchLoop();
-                } else {
-                  dispatchLoop();
+    dispatchThreads = new Thread[options.getNumDispatchThreads()];
+    for (int t = 0; t < options.getNumDispatchThreads(); t++) {
+      Thread dispatchThread =
+          threadFactory.newThread(
+              new Runnable() {
+                @Override
+                public void run() {
+                  LOG.info("Dispatch starting");
+                  if (windmillServiceEnabled) {
+                    int sleepTime = ThreadLocalRandom.current().nextInt(1000, 2000);
+                    Uninterruptibles.sleepUninterruptibly(sleepTime, TimeUnit.MILLISECONDS);
+                    streamingDispatchLoop();
+                  } else {
+                    dispatchLoop();
+                  }
+                  LOG.info("Dispatch done");
                 }
-                LOG.info("Dispatch done");
-              }
-            });
-    //dispatchThread.setPriority(Thread.MIN_PRIORITY);
-    dispatchThread.setName("DispatchThread");
+              });
+      //dispatchThread.setPriority(Thread.MIN_PRIORITY);
+      dispatchThread.setName("DispatchThread-" + t);
+      dispatchThreads[t] = dispatchThread;
+    }
 
     commitThread =
         threadFactory.newThread(
@@ -830,7 +857,9 @@ public class StreamingDataflowWorker {
     }
 
     memoryMonitorThread.start();
-    dispatchThread.start();
+    for (Thread dispatchThread : dispatchThreads) {
+      dispatchThread.start();
+    }
     commitThread.start();
     ExecutionStateSampler.instance().start();
 
@@ -935,8 +964,10 @@ public class StreamingDataflowWorker {
         debugCaptureManager.stop();
       }
       running.set(false);
-      dispatchThread.interrupt();
-      dispatchThread.join();
+      for (Thread dispatchThread : dispatchThreads) {
+        dispatchThread.interrupt();
+        dispatchThread.join();
+      }
       // We need to interrupt the commitThread in case it is blocking on pulling
       // from the commitQueue.
       commitThread.interrupt();
@@ -1024,7 +1055,7 @@ public class StreamingDataflowWorker {
         }
         getWorkItemWaitTimeMs.addValue((long) backoff);
         sleep(backoff);
-        backoff = Math.min(50, backoff * 2);
+        backoff = Math.min(1000, backoff * 2);
       } while (running.get());
 
       dispatchExecutor.execute(new DispatchWorkRunnable(workResponse));
@@ -1355,7 +1386,10 @@ public class StreamingDataflowWorker {
               computationId,
               key,
               workItem.getShardingKey(),
-              workItem.getWorkToken());
+              workItem.getWorkToken(),
+              stateFetches,
+              itemsPerStateFetch,
+              stateFetchLatencyMs);
       StateFetcher localStateFetcher = stateFetcher.byteTrackingView();
 
       // If the read output KVs, then we can decode Windmill's byte key into a userland
@@ -1411,6 +1445,7 @@ public class StreamingDataflowWorker {
         LOG.error(e.toString());
       }
       commitQueue.put(new Commit(commitRequest, computationState, work));
+      commitSizeBytes.addValue((long) commitSize);
 
       // Compute shuffle and state byte statistics these will be flushed asynchronously.
       long stateBytesWritten = outputBuilder.clearOutputMessages().build().getSerializedSize();

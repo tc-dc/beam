@@ -45,11 +45,17 @@ public class DataflowSystemMetrics {
     STATE_CACHE_HIT_RATE("state_cache_hit_rate"),
     STATE_CACHE_EVICTIONS("state_cache_evictions"),
     COMMIT_DURATION_MS("commit_duration_ms"),
+    COMMIT_SIZE_BYTES("commit_size_bytes"),
     WORK_ITEMS_RECEIVED("work_items_received"),
     GET_WORK_ITEM_BATCHES_RECEIVED("get_work_item_batches_received"),
     WORK_ITEMS_PER_BATCH("work_items_per_batch"),
     COMPUTATION_WORK_ITEMS_RECEIVED("computation_work_items_received"),
-    GET_WORK_ITEM_WAIT_TIME_MS("get_work_item_wait_time_ms")
+    GET_WORK_ITEM_WAIT_TIME_MS("get_work_item_wait_time_ms"),
+    STATE_FETCH_BATCHES("state_fetch_batches"),
+    STATE_FETCH_BATCH_SIZE("state_fetch_batch_size"),
+    STATE_FETCH_LATENCY_MS("state_fetch_latency_ms"),
+    MEMORY_MONITOR_IS_THRASHING("memory_monitor_is_thrashing"),
+    MEMORY_MONITOR_NUM_PUSHBACKS("memory_monitor_num_pushbacks"),
     ;
 
     private final String name;
