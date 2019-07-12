@@ -39,7 +39,11 @@ public class DataflowSystemMetrics {
     JAVA_HARNESS_USED_MEMORY("dataflow_java_harness_used_memory"),
     JAVA_HARNESS_MAX_MEMORY("dataflow_java_harness_max_memory"),
     JAVA_HARNESS_RESTARTS("dataflow_java_harness_restarts"),
-    WINDMILL_QUOTA_THROTTLING("dataflow_streaming_engine_throttled_msecs");
+    WINDMILL_QUOTA_THROTTLING("dataflow_streaming_engine_throttled_msecs"),
+    STATE_CACHE_WEIGHT("state_cache_weight"),
+    STATE_CACHE_MAX_WEIGHT("state_cache_max_weight"),
+    STATE_CACHE_HIT_RATE("state_cache_hit_rate"),
+    STATE_CACHE_EVICTIONS("state_cache_evictions");
 
     private final String name;
 

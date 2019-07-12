@@ -78,6 +78,7 @@ import org.apache.beam.runners.dataflow.worker.StreamingDataflowWorker.Work.Stat
 import org.apache.beam.runners.dataflow.worker.StreamingModeExecutionContext.StreamingModeExecutionStateRegistry;
 import org.apache.beam.runners.dataflow.worker.apiary.FixMultiOutputInfosOnParDoInstructions;
 import org.apache.beam.runners.dataflow.worker.counters.Counter;
+import org.apache.beam.runners.dataflow.worker.counters.CounterName;
 import org.apache.beam.runners.dataflow.worker.counters.CounterSet;
 import org.apache.beam.runners.dataflow.worker.counters.DataflowCounterUpdateExtractor;
 import org.apache.beam.runners.dataflow.worker.counters.NameContext;
@@ -418,6 +419,10 @@ public class StreamingDataflowWorker {
   private final Counter<Long, Long> javaHarnessUsedMemory;
   private final Counter<Long, Long> javaHarnessMaxMemory;
   private final Counter<Integer, Integer> windmillMaxObservedWorkItemCommitBytes;
+  private final Counter<Long, Long> stateCacheWeight;
+  private final Counter<Long, Long> stateCacheMaxWeight;
+  private final Counter<Long, Long> stateCacheEvictions;
+  private final Counter<Double, Double> stateCacheHitRate;
   private Timer refreshActiveWorkTimer;
   private Timer statusPageTimer;
 
@@ -564,7 +569,8 @@ public class StreamingDataflowWorker {
       SdkHarnessRegistry sdkHarnessRegistry,
       boolean publishCounters)
       throws IOException {
-    this.stateCache = new WindmillStateCache(options.getWorkerCacheMb() * 1024 * 1024);
+    int maxStateCacheWeight = options.getWorkerCacheMb() * 1024 * 1024;
+    this.stateCache = new WindmillStateCache(maxStateCacheWeight);
     this.mapTaskExecutorFactory = mapTaskExecutorFactory;
     this.workUnitClient = workUnitClient;
     this.options = options;
@@ -598,7 +604,21 @@ public class StreamingDataflowWorker {
     this.windmillMaxObservedWorkItemCommitBytes =
         pendingCumulativeCounters.intMax(
             StreamingSystemCounterNames.WINDMILL_MAX_WORK_ITEM_COMMIT_BYTES.counterName());
+    this.stateCacheWeight =
+        pendingCumulativeCounters.longSum(
+            StreamingSystemCounterNames.STATE_CACHE_WEIGHT.counterName());
+    this.stateCacheMaxWeight =
+        pendingCumulativeCounters.longSum(
+            StreamingSystemCounterNames.STATE_CACHE_MAX_WEIGHT.counterName());
+    this.stateCacheHitRate =
+        pendingCumulativeCounters.doubleSum(
+            StreamingSystemCounterNames.STATE_CACHE_HIT_RATE.counterName());
+    this.stateCacheEvictions =
+        pendingCumulativeCounters.longSum(
+            StreamingSystemCounterNames.STATE_CACHE_EVICTIONS.counterName());
     this.isDoneFuture = new CompletableFuture<>();
+
+    this.stateCacheMaxWeight.addValue((long) maxStateCacheWeight);
 
     this.threadFactory =
         r -> {
@@ -1825,6 +1845,7 @@ public class StreamingDataflowWorker {
   @VisibleForTesting
   public void reportPeriodicWorkerUpdates() {
     updateVMMetrics();
+    updateStateCacheStats();
     try {
       sendWorkerUpdatesToDataflowService(pendingDeltaCounters, pendingCumulativeCounters);
     } catch (IOException e) {
@@ -1847,6 +1868,17 @@ public class StreamingDataflowWorker {
     }
     checkArgument(key != null, "Could not find name for CounterUpdate: %s", counterUpdate);
     return key;
+  }
+
+  private void updateStateCacheStats() {
+    stateCacheWeight.getAndReset();
+    stateCacheWeight.addValue(stateCache.getWeight());
+
+    stateCacheEvictions.getAndReset();
+    stateCacheEvictions.addValue(stateCache.getEvictionCount());
+
+    stateCacheHitRate.getAndReset();
+    stateCacheHitRate.addValue(stateCache.getHitRate());
   }
 
   /** Sends counter updates to Dataflow backend. */
