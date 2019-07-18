@@ -46,6 +46,7 @@ public class DataflowSystemMetrics {
     STATE_CACHE_EVICTIONS("state_cache_evictions"),
     COMMIT_DURATION_MS("commit_duration_ms"),
     COMMIT_SIZE_BYTES("commit_size_bytes"),
+    CURRENT_COMMIT_SIZE_BYTES("current_commit_size_bytes"),
     WORK_ITEMS_RECEIVED("work_items_received"),
     GET_WORK_ITEM_BATCHES_RECEIVED("get_work_item_batches_received"),
     WORK_ITEMS_PER_BATCH("work_items_per_batch"),
@@ -88,7 +89,12 @@ public class DataflowSystemMetrics {
      * This is based on user updated metric "throttled-msecs", reported as part of system metrics so
      * that streaming autoscaler can access it.
      */
-    THROTTLED_MSECS("dataflow_throttled_msecs");
+    THROTTLED_MSECS("dataflow_throttled_msecs"),
+
+    STATE_FETCHES("state_fetches_per_stage"),
+
+    STATE_FETCH_LATENCY("state_fetch_latency_per_stage")
+    ;
 
     private final String namePrefix;
 
