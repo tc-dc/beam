@@ -22,6 +22,7 @@ import java.io.PrintWriter;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicLong;
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
@@ -39,6 +40,8 @@ import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.cache.CacheBuild
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.cache.RemovalCause;
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.cache.Weigher;
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.HashMultimap;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Process-wide cache of per-key state.
@@ -50,6 +53,8 @@ import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.HashMult
  * thread at a time, so this is safe.
  */
 public class WindmillStateCache implements StatusDataProvider {
+  private static final Logger LOG = LoggerFactory.getLogger(WindmillStateCache.class);
+
   // Estimate of overhead per StateId.
   private static final int PER_STATE_ID_OVERHEAD = 20;
   // Initial size of hash tables per entry.
@@ -60,17 +65,28 @@ public class WindmillStateCache implements StatusDataProvider {
   private static final int PER_CACHE_ENTRY_OVERHEAD =
       24 + HASH_MAP_ENTRY_OVERHEAD * INITIAL_HASH_MAP_CAPACITY;
 
+  private long maxWeight;
   private Cache<StateId, StateCacheEntry> stateCache;
   private HashMultimap<ComputationKey, StateId> keyIndex =
       HashMultimap.<ComputationKey, StateId>create();
   private int displayedWeight = 0; // Only used for status pages and unit tests.
+  private final AtomicLong invalidateRequests = new AtomicLong();
+  private final AtomicLong invalidatesFromInconsistentToken = new AtomicLong();
+  private final AtomicLong staleWorkTokenMiss = new AtomicLong();
 
   public WindmillStateCache() {
+    this(100000000 /* 100 MB */);
+  }
+
+  public WindmillStateCache(long maxWeight) {
+    LOG.info("Initializing WindmillStateCache with maxWeight = {}", maxWeight);
+    this.maxWeight = maxWeight;
     final Weigher<Weighted, Weighted> weigher = Weighers.weightedKeysAndValues();
 
     stateCache =
         CacheBuilder.newBuilder()
-            .maximumWeight(100000000 /* 100 MB */)
+            .concurrencyLevel(Math.max(4, Runtime.getRuntime().availableProcessors()))
+            .maximumWeight(maxWeight)
             .recordStats()
             .weigher(weigher)
             .removalListener(
@@ -90,8 +106,30 @@ public class WindmillStateCache implements StatusDataProvider {
             .build();
   }
 
+  public long getSize() { return stateCache.size(); }
+
   public long getWeight() {
     return displayedWeight;
+  }
+
+  public long getEvictionCount() {
+    return stateCache.stats().evictionCount();
+  }
+
+  public double getHitRate() {
+    return stateCache.stats().hitRate();
+  }
+
+  public long getStaleWorkTokenMisses() {
+    return staleWorkTokenMiss.get();
+  }
+
+  public long getInvalidateRequests() {
+    return invalidateRequests.get();
+  }
+
+  public long getInvalidatesFromInconsistentToken() {
+    return invalidatesFromInconsistentToken.get();
   }
 
   /** Per-computation view of the state cache. */
@@ -106,10 +144,13 @@ public class WindmillStateCache implements StatusDataProvider {
     public void invalidate(ByteString processingKey) {
       synchronized (this) {
         ComputationKey key = new ComputationKey(computation, processingKey);
+        int invalidates = 0;
         for (StateId id : keyIndex.get(key)) {
           stateCache.invalidate(id);
+          invalidates++;
         }
         keyIndex.removeAll(key);
+        invalidateRequests.addAndGet(invalidates);
       }
     }
 
@@ -177,6 +218,7 @@ public class WindmillStateCache implements StatusDataProvider {
     }
     if (entry.getCacheToken() != cacheToken) {
       stateCache.invalidate(id);
+      invalidatesFromInconsistentToken.incrementAndGet();
       return null;
     }
     if (workToken <= entry.getLastWorkToken()) {
@@ -380,11 +422,12 @@ public class WindmillStateCache implements StatusDataProvider {
   public void appendSummaryHtml(PrintWriter response) {
     response.println("Cache Stats: <br><table border=0>");
     response.println(
-        "<tr><th>Hit Ratio</th><th>Evictions</th><th>Size</th><th>Weight</th></tr><tr>");
-    response.println("<th>" + stateCache.stats().hitRate() + "</th>");
-    response.println("<th>" + stateCache.stats().evictionCount() + "</th>");
+        "<tr><th>Hit Ratio</th><th>Evictions</th><th>Size</th><th>Weight</th><th>Max Weight</th></tr><tr>");
+    response.println("<th>" + getHitRate() + "</th>");
+    response.println("<th>" + getEvictionCount() + "</th>");
     response.println("<th>" + stateCache.size() + "</th>");
-    response.println("<th>" + getWeight() + "</th>");
+    response.println("<th>" + String.format("%,d", getWeight()) + "</th>");
+    response.println("<th>" + String.format("%,d", maxWeight) + "</th>");
     response.println("</tr></table><br>");
   }
 
