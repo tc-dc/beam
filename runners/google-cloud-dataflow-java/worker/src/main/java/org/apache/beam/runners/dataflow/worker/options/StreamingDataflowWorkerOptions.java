@@ -92,6 +92,26 @@ public interface StreamingDataflowWorkerOptions extends DataflowWorkerHarnessOpt
 
   void setWindmillServiceStreamingRpcBatchLimit(int value);
 
+  @Default.Integer(1)
+  int getNumCommitStreams();
+
+  void setNumCommitStreams(int value);
+
+  @Default.Integer(1)
+  int getNumGetDataStreams();
+
+  void setNumGetDataStreams(int value);
+
+  @Default.Integer(10)
+  int getNumGetDataThreads();
+
+  void setNumGetDataThreads(int value);
+
+  @Default.Integer(1)
+  int getNumDispatchThreads();
+
+  void setNumDispatchThreads(int value);
+
   /**
    * Factory for creating local Windmill address. Reads from system propery 'windmill.hostport' for
    * backwards compatibility.
