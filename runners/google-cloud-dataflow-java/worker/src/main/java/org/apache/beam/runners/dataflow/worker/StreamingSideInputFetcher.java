@@ -64,6 +64,7 @@ public class StreamingSideInputFetcher<InputT, W extends BoundedWindow> {
   private final StateTag<ValueState<Map<W, Set<Windmill.GlobalDataRequest>>>> blockedMapAddr;
 
   private Map<W, Set<Windmill.GlobalDataRequest>> blockedMap = null; // lazily initialized
+  private boolean blockedMapAccessed;
 
   private final Coder<W> mainWindowCoder;
 
@@ -222,19 +223,16 @@ public class StreamingSideInputFetcher<InputT, W extends BoundedWindow> {
   }
 
   public void persist() {
-    if (blockedMap == null) {
+    if (!blockedMapAccessed) {
       return;
     }
 
+    if (blockedMap == null)
+      blockedMap = new HashMap<>();
+
     ValueState<Map<W, Set<Windmill.GlobalDataRequest>>> mapState =
         stepContext.stateInternals().state(StateNamespaces.global(), blockedMapAddr);
-    if (blockedMap.isEmpty()) {
-      // Avoid storing the empty map so we don't leave unnecessary state behind from processing
-      // the key.
-      mapState.clear();
-    } else {
-      mapState.write(blockedMap);
-    }
+    mapState.write(blockedMap);
     blockedMap = null;
   }
 
@@ -242,11 +240,16 @@ public class StreamingSideInputFetcher<InputT, W extends BoundedWindow> {
     if (blockedMap == null) {
       blockedMap =
           stepContext.stateInternals().state(StateNamespaces.global(), blockedMapAddr).read();
-      if (blockedMap == null) {
+      if (blockedMap == null || blockedMap.isEmpty()) {
         blockedMap = new HashMap<>();
       }
     }
+    blockedMapAccessed = true;
     return blockedMap;
+  }
+
+  void prefetchBlockedMap() {
+    blockedMap();
   }
 
   @VisibleForTesting
