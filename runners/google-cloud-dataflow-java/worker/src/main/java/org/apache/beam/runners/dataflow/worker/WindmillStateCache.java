@@ -71,9 +71,10 @@ public class WindmillStateCache implements StatusDataProvider {
   private HashMultimap<ComputationKey, StateId> keyIndex =
       HashMultimap.<ComputationKey, StateId>create();
   private int displayedWeight = 0; // Only used for status pages and unit tests.
-  private final AtomicLong invalidateRequests = new AtomicLong();
-  private final AtomicLong invalidatesFromInconsistentToken = new AtomicLong();
-  private final AtomicLong staleWorkTokenMiss = new AtomicLong();
+
+  private final LongAdder invalidateRequests = new LongAdder();
+  private final LongAdder invalidatesFromInconsistentToken = new LongAdder();
+  private final LongAdder staleWorkTokenMiss = new LongAdder();
 
   private final LongAdder cacheHits = new LongAdder();
   private final LongAdder cacheRequests = new LongAdder();
@@ -133,15 +134,15 @@ public class WindmillStateCache implements StatusDataProvider {
   }
 
   public long getStaleWorkTokenMisses() {
-    return staleWorkTokenMiss.get();
+    return staleWorkTokenMiss.sum();
   }
 
   public long getInvalidateRequests() {
-    return invalidateRequests.get();
+    return invalidateRequests.sum();
   }
 
   public long getInvalidatesFromInconsistentToken() {
-    return invalidatesFromInconsistentToken.get();
+    return invalidatesFromInconsistentToken.sum();
   }
 
   /** Per-computation view of the state cache. */
@@ -154,6 +155,7 @@ public class WindmillStateCache implements StatusDataProvider {
 
     /** Invalidate all cache entries for this computation and {@code processingKey}. */
     public void invalidate(ByteString processingKey) {
+      int invalidates = 0;
       synchronized (this) {
         ComputationKey key = new ComputationKey(computation, processingKey);
         for (StateId id : keyIndex.removeAll(key)) {
@@ -161,6 +163,7 @@ public class WindmillStateCache implements StatusDataProvider {
           invalidates++;
         }
       }
+      invalidateRequests.add(invalidates);
     }
 
     /** Returns a per-computation, per-key view of the state cache. */
@@ -229,7 +232,7 @@ public class WindmillStateCache implements StatusDataProvider {
     }
     if (entry.getCacheToken() != cacheToken) {
       stateCache.invalidate(id);
-      invalidatesFromInconsistentToken.incrementAndGet();
+      invalidatesFromInconsistentToken.increment();
       return null;
     }
     if (workToken <= entry.getLastWorkToken()) {
