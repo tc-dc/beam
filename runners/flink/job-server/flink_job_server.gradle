@@ -32,7 +32,8 @@ mainClassName = "org.apache.beam.runners.flink.FlinkJobServerDriver"
 applyJavaNature(
   archivesBaseName: project.hasProperty('archives_base_name') ? archives_base_name : archivesBaseName,
   validateShadowJar: false,
-  exportJavadoc: false,
+  exportJavadoc: false, 
+  publish: false,
   shadowClosure: {
     append "reference.conf"
   },

@@ -30,6 +30,7 @@ mainClassName = "org.apache.beam.runners.spark.SparkJobServerDriver"
 applyJavaNature(
   validateShadowJar: false,
   exportJavadoc: false,
+  publish: false,
   shadowClosure: {
     append "reference.conf"
   },

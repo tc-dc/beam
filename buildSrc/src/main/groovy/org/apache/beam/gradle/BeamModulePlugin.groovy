@@ -314,10 +314,7 @@ class BeamModulePlugin implements Plugin<Project> {
 
     // Automatically use the official release version if we are performing a release
     // otherwise append '-SNAPSHOT'
-    project.version = '2.15.0'
-    if (!isRelease(project)) {
-      project.version += '-SNAPSHOT'
-    }
+    project.version = '2.15.0.twttr1'
 
     // Default to dash-separated directories for artifact base name,
     // which will also be the default artifactId for maven publications
@@ -440,6 +437,7 @@ class BeamModulePlugin implements Plugin<Project> {
         bigtable_client_core                        : "com.google.cloud.bigtable:bigtable-client-core:1.8.0",
         bigtable_protos                             : "com.google.api.grpc:grpc-google-cloud-bigtable-v2:$generated_grpc_beta_version",
         byte_buddy                                  : "net.bytebuddy:byte-buddy:1.9.3",
+        caffeine                                    : "com.github.ben-manes.caffeine:caffeine:2.7.0",
         cassandra_driver_core                       : "com.datastax.cassandra:cassandra-driver-core:$cassandra_driver_version",
         cassandra_driver_mapping                    : "com.datastax.cassandra:cassandra-driver-mapping:$cassandra_driver_version",
         commons_codec                               : "commons-codec:commons-codec:1.10",
