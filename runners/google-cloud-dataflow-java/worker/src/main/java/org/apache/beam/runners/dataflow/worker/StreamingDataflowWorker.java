@@ -445,7 +445,8 @@ public class StreamingDataflowWorker {
   private final Counter<Long, Long> stateCacheInvalidatesFromInconsistentToken;
   private final Counter<Long, Long> stateCacheStaleWorkTokenMisses;
   private final Counter<Long, CounterFactory.CounterDistribution> commitDurationMs;
-  private final Counter<Long, CounterFactory.CounterDistribution> commitSizeBytes;
+  private final Counter<Long, CounterFactory.CounterDistribution> commitSizeBytesPerCommit;
+  private final Counter<Long, Long> commitSizeBytes;
   private final Counter<Long, Long> currentCommitSizeBytes;
   private final Counter<Long, Long> workItemsReceived;
   private final Counter<Long, Long> getWorkItemBatchesReceived;
@@ -683,8 +684,11 @@ public class StreamingDataflowWorker {
     this.commitDurationMs =
         pendingDeltaCounters.distribution(
             StreamingSystemCounterNames.COMMIT_DURATION_MS.counterName());
-    this.commitSizeBytes =
+    this.commitSizeBytesPerCommit =
         pendingDeltaCounters.distribution(
+            StreamingSystemCounterNames.COMMIT_SIZE_BYTES_PER_COMMIT.counterName());
+    this.commitSizeBytes =
+        pendingDeltaCounters.longSum(
             StreamingSystemCounterNames.COMMIT_SIZE_BYTES.counterName());
     this.currentCommitSizeBytes =
         pendingCumulativeCounters.longSum(
@@ -1561,6 +1565,7 @@ public class StreamingDataflowWorker {
       }
       commitQueue.put(new Commit(commitRequest, computationState, work));
       commitSizeBytes.addValue((long) commitSize);
+      commitSizeBytesPerCommit.addValue((long) commitSize);
 
       // Compute shuffle and state byte statistics these will be flushed asynchronously.
       long stateBytesWritten = outputBuilder.clearOutputMessages().build().getSerializedSize();

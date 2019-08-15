@@ -50,6 +50,7 @@ public class DataflowSystemMetrics {
     STATE_CACHE_INVALIDATES_FROM_INCONSISTENT_TOKEN("state_cache_invalidates_from_inconsistent_token"),
     STATE_CACHE_STALE_WORK_TOKEN_MISSES("state_cache_stale_work_token_misses"),
     COMMIT_DURATION_MS("commit_duration_ms"),
+    COMMIT_SIZE_BYTES_PER_COMMIT("commit_size_bytes_per_commit"),
     COMMIT_SIZE_BYTES("commit_size_bytes"),
     CURRENT_COMMIT_SIZE_BYTES("current_commit_size_bytes"),
     WORK_ITEMS_RECEIVED("work_items_received"),
