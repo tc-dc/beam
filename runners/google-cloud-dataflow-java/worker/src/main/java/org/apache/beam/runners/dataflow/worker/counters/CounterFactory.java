@@ -783,8 +783,6 @@ public class CounterFactory {
         AtomicLongFieldUpdater.newUpdater(DistributionCounterValue.class, "sumOfSquares");
 
     private final Recorder histogram = new Recorder(2);
-    private final Object histogramLock = new Object();
-    private final Histogram cumulativeHistogram = new Histogram(2);
 
     private volatile long sumValue = 0;
     private volatile long sumOfSquares = 0;
@@ -796,7 +794,7 @@ public class CounterFactory {
       SUM_OF_SQUARES_UPDATER.addAndGet(this, (long) Math.pow(value, 2));
     }
 
-    private CounterDistribution toCounterDistribution(Histogram v, long sum, double sumOfSquares) {
+    private static CounterDistribution toCounterDistribution(Histogram v, long sum, double sumOfSquares) {
       if (v.getTotalCount() == 0)
         return CounterDistribution.EMPTY;
 
@@ -834,35 +832,20 @@ public class CounterFactory {
 
     @Override
     public CounterDistribution getAggregate() {
-      final Histogram snapshot;
-      final double sumOfSquares;
-      final long sum;
-      synchronized (histogramLock) {
-        snapshot = histogram.getIntervalHistogram();
-        cumulativeHistogram.add(snapshot);
-
-        sum = SUM_UPDATER.get(this);
-        sumOfSquares = SUM_OF_SQUARES_UPDATER.get(this);
-      }
-      return toCounterDistribution(cumulativeHistogram, sum, sumOfSquares);
+      throw new UnsupportedOperationException("Cumulative histograms are unsupported");
     }
 
     @Override
     public CounterDistribution getAndReset() {
       final Histogram snapshot;
-      final long sum, min, max;
+      final long sum;
       final double sumOfSquares;
-      synchronized (histogramLock) {
-        Histogram incremental = histogram.getIntervalHistogram();
-        cumulativeHistogram.add(incremental);
-        histogram.reset();
 
-        snapshot = cumulativeHistogram.copy();
-        cumulativeHistogram.reset();
+      snapshot = histogram.getIntervalHistogram();
+      histogram.reset();
 
-        sum = SUM_UPDATER.getAndSet(this, 0);
-        sumOfSquares = SUM_OF_SQUARES_UPDATER.getAndSet(this, 0);
-      }
+      sum = SUM_UPDATER.getAndSet(this, 0);
+      sumOfSquares = SUM_OF_SQUARES_UPDATER.getAndSet(this, 0);
 
       return toCounterDistribution(snapshot, sum, sumOfSquares);
     }
