@@ -27,6 +27,7 @@ applyJavaNature(
     automaticModuleName: 'org.apache.beam.runners.samza.jobserver',
     validateShadowJar: false,
     exportJavadoc: false,
+    publish: false,
     shadowClosure: {
       append "reference.conf"
     },
