@@ -22,7 +22,6 @@ import java.io.PrintWriter;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServletRequest;
@@ -111,7 +110,9 @@ public class WindmillStateCache implements StatusDataProvider {
             .build();
   }
 
-  public long getSize() { return stateCache.size(); }
+  public long getSize() {
+    return stateCache.size();
+  }
 
   public long getWeight() {
     return displayedWeight;

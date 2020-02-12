@@ -210,10 +210,11 @@ public class BatchDataflowWorker implements Closeable {
             .build();
 
     CounterSet noop = new CounterSet();
-    this.memoryMonitor = MemoryMonitor.fromOptions(
-        options,
-        noop.longSum(CounterName.named("numPushbacks")),
-        noop.longSum(CounterName.named("isThrashing")));
+    this.memoryMonitor =
+        MemoryMonitor.fromOptions(
+            options,
+            noop.longSum(CounterName.named("numPushbacks")),
+            noop.longSum(CounterName.named("isThrashing")));
     this.statusPages =
         WorkerStatusPages.create(
             DEFAULT_STATUS_PORT, memoryMonitor, sdkHarnessRegistry::sdkHarnessesAreHealthy);

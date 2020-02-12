@@ -186,9 +186,7 @@ public interface DataflowPipelineDebugOptions extends ExperimentalOptions, Pipel
 
   void setNumDispatchThreads(int value);
 
-  /**
-   * The size of the worker's in-memory cache, in megabytes.
-   */
+  /** The size of the worker's in-memory cache, in megabytes. */
   @Description("The size of the worker's in-memory cache, in megabytes.")
   @Default.Integer(100)
   Integer getWorkerCacheMb();
