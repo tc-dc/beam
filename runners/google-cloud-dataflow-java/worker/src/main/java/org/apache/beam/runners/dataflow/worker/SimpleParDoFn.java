@@ -150,8 +150,9 @@ public class SimpleParDoFn<InputT, OutputT> implements ParDoFn {
     this.outputsPerElementTracker = createOutputsPerElementTracker();
     this.doFnSchemaInformation = doFnSchemaInformation;
     this.sideInputMapping = sideInputMapping;
-    this.cleanupCounter = counterFactory.longSum(
-        CounterName.named(CLEANUP_COUNTER_NAME).withOriginalName(stepContext.getNameContext()));
+    this.cleanupCounter =
+        counterFactory.longSum(
+            CounterName.named(CLEANUP_COUNTER_NAME).withOriginalName(stepContext.getNameContext()));
   }
 
   private OutputsPerElementTracker createOutputsPerElementTracker() {
@@ -492,9 +493,7 @@ public class SimpleParDoFn<InputT, OutputT> implements ParDoFn {
   }
 
   private <W extends BoundedWindow> void registerStateCleanup(
-      WindowingStrategy<?, W> windowingStrategy,
-      Collection<W> windowsToCleanup,
-      int jitterMs) {
+      WindowingStrategy<?, W> windowingStrategy, Collection<W> windowsToCleanup, int jitterMs) {
     Coder<W> windowCoder = windowingStrategy.getWindowFn().windowCoder();
 
     for (W window : windowsToCleanup) {
