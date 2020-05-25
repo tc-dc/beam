@@ -23,6 +23,18 @@ import java.util.List;
 /** Interface for staging files needed for running a Dataflow pipeline. */
 public interface Stager {
   /**
+   * Stage default files and return a list of {@link DataflowPackage} objects describing the actual
+   * location at which each file was staged.
+   *
+   * <p>This is required to be identical to calling {@link #stageFiles(List)} with the default set
+   * of files.
+   *
+   * <p>The default is controlled by the implementation of {@link Stager}. The only known
+   * implementation of stager is {@link GcsStager}. See that class for more detail.
+   */
+  List<DataflowPackage> stageDefaultFiles();
+
+  /**
    * Stage files and return a list of packages {@link DataflowPackage} objects describing th actual
    * location at which each file was staged.
    *
@@ -30,7 +42,7 @@ public interface Stager {
    * location specified in the returned {@link DataflowPackage} should, in fact, contain the
    * contents of the staged file.
    */
-  List<DataflowPackage> stageFiles(List<PackageUtil.StagedFile> filesToStage);
+  List<DataflowPackage> stageFiles(List<String> filesToStage);
 
   /** Stage bytes to a target file name wherever this stager stages things. */
   DataflowPackage stageToFile(byte[] bytes, String baseName);

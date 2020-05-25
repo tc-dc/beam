@@ -53,6 +53,7 @@ import javax.annotation.Nullable;
 import org.apache.beam.model.pipeline.v1.RunnerApi;
 import org.apache.beam.runners.core.construction.Environments;
 import org.apache.beam.runners.core.construction.ParDoTranslation;
+import org.apache.beam.runners.core.construction.PipelineTranslation;
 import org.apache.beam.runners.core.construction.SdkComponents;
 import org.apache.beam.runners.core.construction.SplittableParDo;
 import org.apache.beam.runners.core.construction.TransformInputs;
@@ -110,6 +111,7 @@ import org.apache.beam.sdk.values.TimestampedValue;
 import org.apache.beam.sdk.values.TupleTag;
 import org.apache.beam.sdk.values.WindowingStrategy;
 import org.apache.beam.vendor.grpc.v1p26p0.com.google.protobuf.ByteString;
+import org.apache.beam.vendor.grpc.v1p26p0.com.google.protobuf.TextFormat;
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.annotations.VisibleForTesting;
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.base.Supplier;
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.Iterables;
@@ -173,11 +175,24 @@ public class DataflowPipelineTranslator {
 
   /** Translates a {@link Pipeline} into a {@code JobSpecification}. */
   public JobSpecification translate(
-      Pipeline pipeline,
-      RunnerApi.Pipeline pipelineProto,
-      SdkComponents sdkComponents,
-      DataflowRunner runner,
-      List<DataflowPackage> packages) {
+      Pipeline pipeline, DataflowRunner runner, List<DataflowPackage> packages) {
+
+    // Capture the sdkComponents for look up during step translations
+    SdkComponents sdkComponents = SdkComponents.create();
+
+    String workerHarnessContainerImageURL =
+        DataflowRunner.getContainerImageForJob(options.as(DataflowPipelineOptions.class));
+    RunnerApi.Environment defaultEnvironmentForDataflow =
+        Environments.createDockerEnvironment(workerHarnessContainerImageURL)
+            .toBuilder()
+            .addAllCapabilities(Environments.getJavaCapabilities())
+            .build();
+    sdkComponents.registerEnvironment(defaultEnvironmentForDataflow);
+
+    RunnerApi.Pipeline pipelineProto = PipelineTranslation.toProto(pipeline, sdkComponents, true);
+
+    LOG.debug("Portable pipeline proto:\n{}", TextFormat.printToString(pipelineProto));
+
     Translator translator = new Translator(pipeline, runner, sdkComponents);
     Job result = translator.translate(packages);
     return new JobSpecification(
